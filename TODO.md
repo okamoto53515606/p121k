@@ -5,7 +5,7 @@
 ## 開発
 
 - [x] **Claude Haiku 5.5 の Marketplace 契約**: 2026-11-22 10:47 UTC（19:47 JST）に承諾済み。契約ID `agmt-b398skur7br2wqwqzvp1aovgm` / オファー `offer-u3aih6zr7uw5u` / 製品 `prod-6cyn7tgqazjhu`（Anthropic, PBC「Claude Haiku 5.5 (Amazon Bedrock Edition)」）。`GetFoundationModelAvailability` は `agreementAvailability=AVAILABLE`
-- [ ] **モデルアクセスの付与待ち（AWS 側）**: 契約から2時間経過しても推論は `AccessDeniedException`。原因は Service Quotas の `Cross-region model inference tokens per minute for Anthropic Claude Haiku 5.5` が **0**（既定は1,000万なので quota 引き上げではなく、アクセス自体が未付与）。`tools/probe_haiku55.py` で監視し、付与されたら Playground と `POST /karte/{id}/copy` の `model` が 5.5 になることを確認。AWS サポート窓口への起票が必要（下の「連絡用メモ」）
+- [ ] **モデルアクセスの付与待ち（AWS 側）**: 契約から3.5時間（2026-11-22 14:15 UTC 時点）経過しても推論は `AccessDeniedException`。原因は Service Quotas の `Cross-region model inference tokens per minute for Anthropic Claude Haiku 5.5` が **0**（既定は1,000万なので quota 引き上げではなく、アクセス自体が未付与）。`tools/probe_haiku55.py` で監視し、付与されたら Playground と `POST /karte/{id}/copy` の `model` が 5.5 になることを確認。AWS サポート窓口への起票が必要（下の「連絡用メモ」）
 - [x] Haiku 5.5 のバッチ推論の可否を確認 → **非対応**（実機で拒否を確認。文案生成は即時APIのみ）
 - [x] **代替モデルへの自動フォールバックを削除**（黙って別モデルに切り替わらないようにする。使えなければエラー）
 - [x] **退会データが残りうる場所の棚卸しと対処**（原則7に関わる）
