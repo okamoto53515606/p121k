@@ -14,6 +14,8 @@ import tempfile
 import time
 from collections import defaultdict
 
+import boto3
+
 import common as c
 import policy
 from pii import mask
@@ -163,6 +165,23 @@ def _finish(k: dict) -> None:
     if len(k["categories"]) > MAX_CATEGORIES:
         k["categories"] = dict(sorted(k["categories"].items(), key=lambda kv: -kv[1])[:MAX_CATEGORIES])
     k["inquiries"] = sorted(k["inquiries"], key=lambda q: q["ts"])[-MAX_INQUIRIES:]
+
+
+def publish_metrics(counts: dict) -> None:
+    """Build outcome as CloudWatch metrics, so "rejects suddenly spiked" can raise an alarm.
+    Never fails the build: metrics are observability, not correctness."""
+    try:
+        boto3.client("cloudwatch").put_metric_data(
+            Namespace="P121K",
+            MetricData=[
+                {"MetricName": "RejectedRows", "Value": float(counts["rejected_rows"]), "Unit": "Count"},
+                {"MetricName": "SkippedFiles", "Value": float(len(counts["skipped_files"])), "Unit": "Count"},
+                {"MetricName": "Members", "Value": float(counts["members"]), "Unit": "Count"},
+                {"MetricName": "BatchUsers", "Value": float(counts["batch_users"]), "Unit": "Count"},
+            ],
+        )
+    except Exception as e:  # noqa: BLE001
+        log.warning("metric publish failed: %s", e)
 
 
 def _scan_karte(**kw):
@@ -324,4 +343,5 @@ def build(state: dict) -> dict:
               "batch_users": len(eligible), "items": len(items), "late_api_deletes": late,
               "rejected_rows": report.reject_total, "skipped_files": report.skipped_files,
               "retention_cutoff": c.iso_jst(cutoff), **stats}
+    publish_metrics(counts)
     return {**state, "run": run, "run_started": int(started), "counts": counts}

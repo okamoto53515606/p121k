@@ -123,7 +123,8 @@ npx cdk deploy KarteStack --outputs-file ../data/outputs.json
 - `DELETE` 後にFULLを回しても復活しない。署名なしAPIは403。
 - 不正行・不正ファイルは拒否され、電話番号などの全文はカルテに残らない。
 - Personalize 全パイプライン成功（学習 約40分）。14,359名にTop-10を反映し、退会者・NG会員への反映は0。
-- 署名付きでも `karte-api-invoke` を持たないロールは403。APIアクセスログとLambdaログに会員IDは残らない（`member_tag` のみ）。
+- 署名付きでも `karte-api-invoke` を持たない IAM ユーザーは 403。APIアクセスログとLambdaログに会員IDは残らない（`member_tag` のみ）。
+- 障害通知（SNS `karte-alerts`）とデータ品質アラーム（拒否行・スキップファイル）がデプロイされ、build のメトリクス（名前空間 `P121K`）が CloudWatch に届くことを確認。
 
 ## データ出典とライセンス
 
@@ -148,3 +149,15 @@ npx cdk deploy KarteStack --outputs-file ../data/outputs.json
 
 - `data/`（元データ・HMAC鍵・正解ラベル・デプロイ出力）は git 管理外。アップロード・コミット禁止。
 - Personalize Schema は**タグ変更で置換され、名前衝突して失敗**する。スタックのタグを変えない。
+
+## ライセンス
+
+このリポジトリのコードは [MIT License](./LICENSE)。
+
+同梱しないデータの扱いは次のとおり。
+
+| 対象 | ライセンス / 条件 |
+|---|---|
+| REES46 eCommerce behavior data | 作者の記載に従う（出典明記）。正式な OSS ライセンスではないため、検証用途に限定し、リポジトリには含めない |
+| 生成したサンプル（`docs/samples/`） | 本リポジトリと同じ MIT（合成データのみ） |
+| Claude Haiku 5.5 / Amazon Personalize | 各サービスの利用規約に従う（コードのライセンスとは別） |

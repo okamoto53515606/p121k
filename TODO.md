@@ -4,8 +4,8 @@
 
 ## 開発
 
-- [x] **Claude Haiku 5.5 の Marketplace 契約**: `create-foundation-model-agreement` で契約（2026-11-22 19:47 JST, ap-northeast-1）。`GetFoundationModelAvailability` は `agreementAvailability=AVAILABLE`
-- [ ] **アカウント検証の完了待ち**: 契約直後は推論が `AccessDeniedException`。検証は通常2時間以内。`tools/probe_haiku55.py` で `jp.anthropic.claude-haiku-5-5` の応答を確認し、Playground と `POST /karte/{id}/copy` の `model` が 5.5 になることを確認
+- [x] **Claude Haiku 5.5 の Marketplace 契約**: 2026-11-22 10:47 UTC（19:47 JST）に承諾済み。契約ID `agmt-b398skur7br2wqwqzvp1aovgm` / オファー `offer-u3aih6zr7uw5u` / 製品 `prod-6cyn7tgqazjhu`（Anthropic, PBC「Claude Haiku 5.5 (Amazon Bedrock Edition)」）。`GetFoundationModelAvailability` は `agreementAvailability=AVAILABLE`
+- [ ] **アカウント検証の完了待ち**: 契約直後は推論が `AccessDeniedException`（ap-northeast-3 では「Verification normally takes less than 2 hours」と明示）。`tools/probe_haiku55.py` で `jp.anthropic.claude-haiku-5-5` の利用可否を監視し、応答したら Playground と `POST /karte/{id}/copy` の `model` が 5.5 になることを確認（現状: 契約から 70 分経過しても未解消）
 - [x] Haiku 5.5 のバッチ推論の可否を確認 → **非対応**（実機で拒否を確認。文案生成は即時APIのみ）
 - [x] **代替モデルへの自動フォールバックを削除**（黙って別モデルに切り替わらないようにする。使えなければエラー）
 - [x] **退会データが残りうる場所の棚卸しと対処**（原則7に関わる）
@@ -19,14 +19,14 @@
   - [x] PUT先S3パス・ファイル仕様・APIエンドポイント・curl 例の案内、APIセルフテスト
   - [x] ローカル限定（127.0.0.1 + Host検査）/ Basic認証 / キーはメモリのみ（ディスクに書かない）
 - [x] **障害通知**: Step Functions の失敗（FAILED/TIMED_OUT/ABORTED）と Lambda エラーを SNS `karte-alerts` へ。メール購読は `-c alertEmail=`
-- [ ] 拒否行・`skipped_files` の**急増**を検知するアラーム（現状はイベント通知のみ。メトリクスフィルタの設計が必要）
+- [x] 拒否行・`skipped_files` の**急増**を検知するアラーム（build が CloudWatch 名前空間 `P121K` に `RejectedRows` / `SkippedFiles` / `Members` / `BatchUsers` を発行し、しきい値超過で SNS 通知。実機で `RejectedRows=2` の受信を確認）
 - [x] build 失敗時に中途半端な状態にならないことの確認（「読み切ってから書く」順序。docs/operations.md に明記）
 - [x] 自社側ツールの参考実装: `tools/ingest_side.py`（HMAC仮名化・問い合わせの分類コード化・`withdraw` 出力）
 - [ ] 自社サーバ用 IAM（Roles Anywhere / OIDC など）の構成例
 - [x] 監査: CloudTrail データイベント（`-c auditTrail=true`）と API Gateway アクセスログ
 - [ ] AWS Config ルール（暗号化・公開禁止・保持期間の継続監視）
 - [x] スケール: build を Glue / Fargate に置き換える閾値と設計（docs/operations.md §6。目安は build 10分超）
-- [ ] LICENSE の決定（現状は未設定）
+- [x] **LICENSE の決定**: **MIT**（`LICENSE`、`setup/package.json` / `infra/package.json` の `license`、README の「ライセンス」節）
 
 ## テスト
 

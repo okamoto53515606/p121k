@@ -2,6 +2,7 @@
   "name": "p121k-setup",
   "version": "0.1.0",
   "private": true,
+  "license": "MIT",
   "description": "P121K セットアップ / 運用画面（ローカル限定）",
   "scripts": {
     "dev": "next dev -p 3011 -H 127.0.0.1",

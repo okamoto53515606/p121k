@@ -130,6 +130,7 @@ export class KarteStack extends Stack {
       resources: ['*'],
     }));
     pRole.grantPassRole(pipelineFn.grantPrincipal);
+    pipelineFn.addToRolePolicy(new iam.PolicyStatement({ actions: ['cloudwatch:PutMetricData'], resources: ['*'] }));
 
     const step = (action: string) => new tasks.LambdaInvoke(this, `S-${action}`, {
       lambdaFunction: pipelineFn, payload: sfn.TaskInput.fromObject({ action, 'state.$': '$' }),
@@ -186,6 +187,20 @@ export class KarteStack extends Stack {
     };
     alarm('PipelineErrors', pipelineFn.metricErrors({ period: Duration.minutes(5) }), 'FULL pipeline step failed (rejects/schema/data problem)');
     alarm('ApiErrors', apiFn.metricErrors({ period: Duration.minutes(5) }), 'Karte API returned a server error');
+
+    // Data-quality alarms: a PUT-side format change shows up as a jump in rejects, not as a failure.
+    const buildMetric = (name: string) => new cw.Metric({ namespace: 'P121K', metricName: name, statistic: cw.Stats.MAXIMUM, period: Duration.days(1) });
+    const qualityAlarm = (id: string, name: string, threshold: number, desc: string) => {
+      const a = new cw.Alarm(this, id, {
+        metric: buildMetric(name), threshold, evaluationPeriods: 1,
+        comparisonOperator: cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD,
+        treatMissingData: cw.TreatMissingData.NOT_BREACHING, alarmDescription: desc,
+      });
+      a.addAlarmAction(new cw_actions.SnsAction(alerts));
+      return a;
+    };
+    qualityAlarm('RejectsSpike', 'RejectedRows', 50, 'FULL build rejected an unusual number of rows (data contract change?)');
+    qualityAlarm('SkippedFiles', 'SkippedFiles', 1, 'FULL build skipped a whole file (columns / encoding changed?)');
 
     const policyStatements = [
       new iam.PolicyStatement({ effect: iam.Effect.ALLOW, principals: [new iam.AccountRootPrincipal()], actions: ['execute-api:Invoke'], resources: ['execute-api:/*'] }),

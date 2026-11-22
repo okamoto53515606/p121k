@@ -73,9 +73,12 @@ test('PITR is off so a withdrawn member cannot survive in backups', () => {
 test('failures are announced (SNS topic + pipeline and API error alarms)', () => {
   const t = template();
   t.resourceCountIs('AWS::SNS::Topic', 1);
-  t.resourceCountIs('AWS::CloudWatch::Alarm', 2);
+  t.resourceCountIs('AWS::CloudWatch::Alarm', 4); // pipeline errors, API errors, reject spike, skipped files
   const rules = t.findResources('AWS::Events::Rule');
   expect(JSON.stringify(rules)).toContain('Step Functions Execution Status Change');
+  const alarms = JSON.stringify(t.findResources('AWS::CloudWatch::Alarm'));
+  expect(alarms).toContain('RejectedRows');
+  expect(alarms).toContain('SkippedFiles');
 });
 
 test('API access logs record the resource template, not the request path', () => {
