@@ -118,6 +118,8 @@ npx cdk deploy KarteStack --outputs-file ../data/outputs.json
 - 単価（Bedrock の Marketplace オファーの料金表で確認済み）: 日本向けプロファイルは入力 $0.11 / 出力 $0.55 /100万トークン（グローバルは $0.10 / $0.50）。100Kトークン超は入力 $0.55 / 出力 $2.75。
 - **Haiku 5.5 は Bedrock のバッチ推論に対応していない**（`CreateModelInvocationJob` が `Batch inference is not supported for the requested model` で拒否することを実機で確認）。バッチ対応の Haiku 4.5 は未使用。文案生成は即時API（`POST /copy`）のみ。
 - 利用には Marketplace の契約（従量課金・返金なし）への同意が必要。未同意のアカウントでは Haiku 4.5 に自動フォールバックする。
+- 契約は `aws bedrock create-foundation-model-agreement --model-id anthropic.claude-haiku-5-5 --offer-token <list-foundation-model-agreement-offers の token>` で作成できる（2026-11-22 に ap-northeast-1 で作成済み）。
+- 契約直後は **アカウント検証待ち**で、推論は `AccessDeniedException` になる。ap-northeast-3 では「Your account is currently being verified. Verification normally takes less than 2 hours.」と明示されるが、ap-northeast-1 では「is not available for this account」という紛らわしい汎用文言になる。`tools/probe_haiku55.py` で利用可能になるまで確認できる。
 - Personalize v2: 取込 $0.05/GB、学習 $2.00/100万インタラクション、推論 $0.15/1,000リクエスト。FULL再学習は毎回全件が学習課金の対象。
 
 ## 注意

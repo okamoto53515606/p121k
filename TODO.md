@@ -4,7 +4,8 @@
 
 ## 開発
 
-- [ ] **Claude Haiku 5.5 の有効化**: Marketplace の契約（従量課金・返金なし）に同意して利用可能にし、実機で `jp.anthropic.claude-haiku-5-5` の応答を確認（現状は Haiku 4.5 へ自動フォールバック）
+- [x] **Claude Haiku 5.5 の Marketplace 契約**: `create-foundation-model-agreement` で契約（2026-11-22 19:47 JST, ap-northeast-1）。`GetFoundationModelAvailability` は `agreementAvailability=AVAILABLE`
+- [ ] **アカウント検証の完了待ち**: 契約直後は推論が `AccessDeniedException`。検証は通常2時間以内。`tools/probe_haiku55.py` で `jp.anthropic.claude-haiku-5-5` の応答を確認し、Playground と `POST /karte/{id}/copy` の `model` が 5.5 になることを確認（現状は Haiku 4.5 へ自動フォールバック）
 - [x] Haiku 5.5 のバッチ推論の可否を確認 → **非対応**（実機で拒否を確認。文案生成は即時APIのみ）
 - [ ] **退会データが残りうる場所の棚卸しと対処**（原則7に関わる）
   - [ ] CloudWatch Logs（仮名 `member_id` を記録している。保持1か月）
