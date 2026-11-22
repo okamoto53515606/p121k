@@ -30,7 +30,7 @@ homepage-v2 の思想（売り手都合ではなく利用者のことを考え�
 
 ### アクセス
 1. **外部からの直接アクセスを防ぐために、APIは IAM 認証（SigV4）のみにする。** ブラウザ向けの公開APIは作らない。署名なしは403。送信元IP制限も任意で付けられる（`allowedCidrs`）。
-2. **認証情報の漏えいを防ぐために、長期アクセスキーを使わず、IAMロールだけで呼び出す。** 呼び出し側には最小権限のマネージドポリシー（`karte-api-invoke` / `karte-inbound-upload`）だけを付ける。
+2. **認証情報の漏えいを防ぐために、長期アクセスキーを使わず、IAMロールだけで呼び出す。** 呼び出し側には最小権限のマネージドポリシー（`karte-api-invoke` / `karte-inbound-upload`）だけを付ける。**利用システム側でのアクセスキー運用は禁止**（このスタックは IAM ユーザーもキーも作らない）。
 3. **他のデータとの混在を防ぐために、単一社・専用アカウント・専用KMSキーにする。** マルチテナントにしない。
 
 ### データの最小化
@@ -76,12 +76,12 @@ flowchart LR
   end
 
   ops -- "デプロイ / FULL / 設定<br/>（127.0.0.1 の画面）" --> sfn
-  batch -- "IAMキー（S3用）" --> s3in
+  batch -- "IAMロール p121k-upload を引き受け" --> s3in
   s3in --> sfn
   sfn --> karte
   sfn --> pers
   pers --> sfn
-  app -- "IAM署名（API用）" --> apigw
+  app -- "IAMロール p121k-api を引き受け<br/>（SigV4署名）" --> apigw
   apigw --> fn
   fn --> karte
   fn --> bedrock

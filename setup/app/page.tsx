@@ -12,8 +12,6 @@ type Settings = {
   geoBlock: boolean;
   uploadCidrs: string;
   callerPrincipalArns: string;
-  accessKeys: boolean;
-  accessKeyMaxAgeDays: number;
 };
 type Deploy = { startedAt: string; finishedAt?: string; exitCode?: number; action: "deploy" | "destroy" };
 type Stack = { status: string; outputs: Record<string, string>; updatedAt?: string } | null;
@@ -26,8 +24,7 @@ type StateResp = {
 const EMPTY: StateResp = {
   connected: false,
   settings: { retentionYears: 3, weeklyFull: false, alertEmail: "", allowedCidrs: "", auditTrail: false,
-    modelId: "jp.anthropic.claude-haiku-5-5", geoBlock: true, uploadCidrs: "", callerPrincipalArns: "",
-    accessKeys: false, accessKeyMaxAgeDays: 180 },
+    modelId: "jp.anthropic.claude-haiku-5-5", geoBlock: true, uploadCidrs: "", callerPrincipalArns: "" },
   stack: null, execution: null, log: "",
 };
 
@@ -38,8 +35,6 @@ export default function Page() {
   const [form, setForm] = useState({ accessKeyId: "", secretAccessKey: "", sessionToken: "", region: "ap-northeast-1" });
   const [settings, setSettings] = useState<Settings>(EMPTY.settings);
   const [selftest, setSelftest] = useState<null | { unsigned: number; signed: number; ok: boolean; note: string; target: string }>(null);
-  const [keys, setKeys] = useState<null | Record<string, unknown>>(null);
-  const [issued, setIssued] = useState<null | { kind: string; accessKeyId: string; secretAccessKey: string; expires: string; warning: string }>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -198,16 +193,7 @@ export default function Page() {
             <input type="checkbox" checked={settings.geoBlock} onChange={(e) => setSettings({ ...settings, geoBlock: e.target.checked })} />
             <span>海外IPからの API 呼び出しを遮断する（WAF の国判定で日本以外をブロック。課金あり）</span>
           </label>
-          <label className="check">
-            <input type="checkbox" checked={settings.accessKeys} onChange={(e) => setSettings({ ...settings, accessKeys: e.target.checked })} />
-            <span>長期アクセスキー方式も用意する（<strong>非推奨</strong>。IAM ロールを使えない場合だけ。既定は無効）</span>
-          </label>
-          {settings.accessKeys && (
-            <label className="field"><span>アクセスキーの有効期間（日）</span>
-              <input type="number" min={1} max={365} value={settings.accessKeyMaxAgeDays}
-                onChange={(e) => setSettings({ ...settings, accessKeyMaxAgeDays: Number(e.target.value) })} />
-            </label>
-          )}
+
         </section>
 
         <section className="card" id="deploy">
@@ -344,32 +330,9 @@ curl -X DELETE … "${apiBase}/karte/<memberId>"`}</pre>
             </tbody>
           </table>
           <p className="muted small">別アカウントのロールに許可する場合は、設定の「ロールを引き受けさせる相手」に ARN を追加して再デプロイします。</p>
-          {settings.accessKeys && (<>
-          <h3 style={{ fontSize: 13, margin: "12px 0 4px" }}>長期アクセスキー（非推奨）</h3>
-          <p className="muted small">
-            発行した秘密キーは<strong>この画面に一度だけ</strong>表示されます。期限を過ぎたキーは日次ジョブが自動で無効化・削除します。
+          <p className="notice small" style={{ marginTop: 10 }}>
+            長期アクセスキーの発行は行いません（<strong>禁止</strong>）。上のロールを使ってください。
           </p>
-          <div className="actions">
-            <button disabled={!deployed || busy !== null} onClick={async () => { setKeys(await (await fetch("/api/keys")).json()); }}>現在のキーを表示</button>
-            <button disabled={!deployed || busy !== null} onClick={async () => {
-              const r = await fetch("/api/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "upload" }) });
-              const j = await r.json();
-              if (r.ok) { setIssued(j); setMsg({ kind: "warn", text: "S3用キーを発行しました。秘密キーは一度しか表示されません。" }); } else setMsg({ kind: "ng", text: j.error });
-            }}>S3用キーを発行</button>
-            <button disabled={!deployed || busy !== null} onClick={async () => {
-              const r = await fetch("/api/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "api" }) });
-              const j = await r.json();
-              if (r.ok) { setIssued(j); setMsg({ kind: "warn", text: "API用キーを発行しました。秘密キーは一度しか表示されません。" }); } else setMsg({ kind: "ng", text: j.error });
-            }}>API用キーを発行</button>
-          </div>
-          {issued && (
-            <div className="notice warn" style={{ marginTop: 10 }}>
-              <div>{issued.warning}</div>
-              <pre>{`AWS_ACCESS_KEY_ID=${issued.accessKeyId}\nAWS_SECRET_ACCESS_KEY=${issued.secretAccessKey}\n有効期限: ${new Date(issued.expires).toLocaleString("ja-JP")}`}</pre>
-            </div>
-          )}
-          {keys && <pre>{JSON.stringify(keys, null, 2)}</pre>}
-          </>)}
         </section>
 
         <section className="card" id="destroy">

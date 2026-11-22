@@ -15,8 +15,6 @@ export interface Settings {
   geoBlock: boolean;
   uploadCidrs: string;
   callerPrincipalArns: string;
-  accessKeys: boolean; // 非推奨: 長期アクセスキーで呼ぶ場合だけ有効化
-  accessKeyMaxAgeDays: number;
 }
 
 export interface DeployState {
@@ -45,8 +43,6 @@ export const DEFAULT_SETTINGS: Settings = {
   geoBlock: true,
   uploadCidrs: "",
   callerPrincipalArns: "",
-  accessKeys: false,
-  accessKeyMaxAgeDays: 180,
 };
 
 const STATE_PATH = resolve(process.cwd(), "setup-state.json");
@@ -88,8 +84,6 @@ export function validateSettings(input: unknown): { ok: true; settings: Settings
   if (allowedCidrs && !/^[0-9a-fA-F.:/,\s]+$/.test(allowedCidrs)) return { ok: false, error: "IP制限は CIDR をカンマ区切りで指定してください" };
   const modelId = String(b.modelId ?? DEFAULT_SETTINGS.modelId).trim();
   if (!/^[a-z0-9.-]+$/.test(modelId)) return { ok: false, error: "モデルIDの形式が不正です" };
-  const keyDays = Number(b.accessKeyMaxAgeDays ?? DEFAULT_SETTINGS.accessKeyMaxAgeDays);
-  if (!Number.isInteger(keyDays) || keyDays < 1 || keyDays > 365) return { ok: false, error: "アクセスキーの有効期間は1〜365日で指定してください" };
   const uploadCidrs = String(b.uploadCidrs ?? "").trim();
   if (uploadCidrs && !/^[0-9a-fA-F.:/,\s]+$/.test(uploadCidrs)) return { ok: false, error: "S3のIP制限は CIDR をカンマ区切りで指定してください" };
   return {
@@ -104,8 +98,6 @@ export function validateSettings(input: unknown): { ok: true; settings: Settings
       geoBlock: b.geoBlock !== false,
       uploadCidrs: String(b.uploadCidrs ?? "").trim(),
       callerPrincipalArns: String(b.callerPrincipalArns ?? "").trim(),
-      accessKeys: Boolean(b.accessKeys),
-      accessKeyMaxAgeDays: Number(b.accessKeyMaxAgeDays ?? DEFAULT_SETTINGS.accessKeyMaxAgeDays),
     },
   };
 }

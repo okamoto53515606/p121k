@@ -17,8 +17,6 @@ export function contextArgs(s: Settings): string[] {
     "-c", `auditTrail=${s.auditTrail ? "true" : "false"}`,
     "-c", `modelId=${s.modelId}`,
     "-c", `geoBlock=${s.geoBlock ? "true" : "false"}`,
-    "-c", `accessKeys=${s.accessKeys ? "true" : "false"}`,
-    "-c", `accessKeyMaxAgeDays=${s.accessKeyMaxAgeDays}`,
     // 本番は常に "now"（基準時刻＝実行時刻）。過去データの検証は CLI から
     // `-c policyReference=last_event` を明示してデプロイする。
     "-c", "policyReference=now",
