@@ -6,7 +6,7 @@ import {
   aws_dynamodb as ddb, aws_events as events, aws_events_targets as targets,
   aws_iam as iam, aws_kms as kms, aws_lambda as lambda, aws_logs as logs, aws_s3 as s3,
   aws_personalize as personalize, aws_sns as sns, aws_sns_subscriptions as subs,
-  aws_stepfunctions as sfn, aws_stepfunctions_tasks as tasks,
+  aws_stepfunctions as sfn, aws_stepfunctions_tasks as tasks, aws_wafv2 as wafv2,
 } from 'aws-cdk-lib';
 
 export class KarteStack extends Stack {
@@ -19,6 +19,9 @@ export class KarteStack extends Stack {
     const weeklyFull = ctx('weeklyFull', 'false') === 'true';
     const alertEmail = ctx('alertEmail', ''); // optional: where pipeline/API failures are mailed
     const auditTrail = ctx('auditTrail', 'false') === 'true'; // CloudTrail data events (billable)
+    const geoBlock = ctx('geoBlock', 'true') === 'true'; // API: block requests originating outside Japan
+    const uploadCidrs = ctx('uploadCidrs', '').split(',').map((x) => x.trim()).filter(Boolean);
+    const accessKeyMaxAgeDays = ctx('accessKeyMaxAgeDays', '180'); // enforced by the keyguard job
     const allowedCidrs = ctx('allowedCidrs', '').split(',').map((s) => s.trim()).filter(Boolean);
 
     const key = new kms.Key(this, 'DataKey', {
@@ -48,7 +51,20 @@ export class KarteStack extends Stack {
       removalPolicy: RemovalPolicy.DESTROY,
       deletionProtection: false,
     });
-    const karte = table('Karte', 'member_id');
+    // New logical id: DynamoDB allows only one GSI creation per update, so the table
+    // with all six search indexes is created fresh. Data is rebuilt from S3 by the next FULL.
+    const karte = table('KarteV2', 'member_id');
+    // List search: one index per sortable field, fixed partition key `entity`.
+    // KEYS_ONLY keeps them small: member_id + the sort value are all the API returns.
+    for (const attr of ['first_purchase_ts', 'last_purchase_ts', 'first_view_ts', 'last_view_ts',
+                        'purchase_count_90d', 'view_count_90d']) {
+      karte.addGlobalSecondaryIndex({
+        indexName: `karte-${attr.replace(/_ts$/, '').replace(/_/g, '-')}`,
+        partitionKey: { name: 'entity', type: ddb.AttributeType.STRING },
+        sortKey: { name: attr, type: ddb.AttributeType.NUMBER },
+        projectionType: ddb.ProjectionType.KEYS_ONLY,
+      });
+    }
 
     const env = {
       TABLE_KARTE: karte.tableName,
@@ -241,7 +257,9 @@ export class KarteStack extends Stack {
       },
     });
     const integ = new apigw.LambdaIntegration(apiFn);
-    const member = api.root.addResource('karte').addResource('{memberId}');
+    const karteRes = api.root.addResource('karte');
+    karteRes.addResource('search').addMethod('GET', integ);
+    const member = karteRes.addResource('{memberId}');
     member.addMethod('GET', integ);
     member.addMethod('DELETE', integ);
     member.addResource('reco').addMethod('GET', integ);
@@ -261,7 +279,58 @@ export class KarteStack extends Stack {
     });
 
     new CfnOutput(this, 'PipelineFunctionName', { value: pipelineFn.functionName });
+    // Two long-lived keys, two purposes: S3 PUT and API. Keys are created from the
+    // console and expire (max age enforced daily by keyguard).
+    const uploadUser = new iam.User(this, 'UploadUser', { userName: 'p121k-upload', managedPolicies: [uploadPolicy] });
+    const apiUser = new iam.User(this, 'ApiUser', { userName: 'p121k-api', managedPolicies: [invokePolicy] });
+    for (const u of [uploadUser, apiUser]) Tags.of(u).add('p121k-managed', 'true');
+    const keyguard = fn('Keyguard', 'keyguard.handler', {
+      timeout: Duration.minutes(5), environment: { ...env, KEY_USERS: `${uploadUser.userName},${apiUser.userName}`, ACCESS_KEY_MAX_AGE_DAYS: accessKeyMaxAgeDays },
+    });
+    keyguard.addToRolePolicy(new iam.PolicyStatement({
+      actions: ['iam:ListAccessKeys', 'iam:UpdateAccessKey', 'iam:DeleteAccessKey', 'iam:ListUsers'],
+      resources: [uploadUser.userArn, apiUser.userArn],
+    }));
+    new events.Rule(this, 'KeyguardDaily', {
+      schedule: events.Schedule.cron({ minute: '15', hour: '19' }), // 04:15 JST
+      targets: [new targets.LambdaFunction(keyguard)],
+    });
+
+    // 海外IPからのAPI呼び出しを遮断（国単位）。WAF は API Gateway のステージに紐づける。
+    if (geoBlock) {
+      const acl = new wafv2.CfnWebACL(this, 'ApiGeoAcl', {
+        name: 'karte-api-jp-only', scope: 'REGIONAL',
+        defaultAction: { allow: {} },
+        visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: 'karte-api-geo', sampledRequestsEnabled: true },
+        rules: [{
+          name: 'block-outside-japan', priority: 0, action: { block: {} },
+          statement: { notStatement: { statement: { geoMatchStatement: { countryCodes: ['JP'] } } } },
+          visibilityConfig: { cloudWatchMetricsEnabled: true, metricName: 'karte-api-block-non-jp', sampledRequestsEnabled: true },
+        }],
+      });
+      new wafv2.CfnWebACLAssociation(this, 'ApiGeoAclAssoc', {
+        resourceArn: api.deploymentStage.stageArn, webAclArn: acl.attrArn,
+      });
+    }
+
+    // S3 も同じ考え方で絞る。ただし S3 に「国」の概念は無いので、
+    // 自社の固定グローバルIP（CIDR）を指定した場合だけ許可リストになる。
+    if (uploadCidrs.length) {
+      bucket.addToResourcePolicy(new iam.PolicyStatement({
+        effect: iam.Effect.DENY, principals: [new iam.AnyPrincipal()], actions: ['s3:PutObject'],
+        resources: [bucket.arnForObjects('inbound/*')],
+        conditions: {
+          NotIpAddress: { 'aws:SourceIp': uploadCidrs },
+          // the API Lambda writes the withdraw row itself; it has no fixed egress IP
+          ArnNotLike: { 'aws:PrincipalArn': [apiFn.role!.roleArn] },
+        },
+      }));
+    }
+
     new CfnOutput(this, 'AlertsTopicArn', { value: alerts.topicArn });
+    new CfnOutput(this, 'UploadUserName', { value: uploadUser.userName });
+    new CfnOutput(this, 'ApiUserName', { value: apiUser.userName });
+    new CfnOutput(this, 'AccessKeyMaxAgeDays', { value: accessKeyMaxAgeDays });
     new CfnOutput(this, 'PipelineArn', { value: pipeline.stateMachineArn });
     new CfnOutput(this, 'ApiUrl', { value: api.url });
     new CfnOutput(this, 'ApiFunctionName', { value: apiFn.functionName });

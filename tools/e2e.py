@@ -34,9 +34,10 @@ REGION = "ap-northeast-1"
 def _outputs() -> dict:
     """cdk deploy の出力（CLI 直実行の data/outputs.json と、画面からの setup/state-outputs.json を統合）"""
     merged: dict = {}
-    for path in (os.path.join(ROOT, "data", "outputs.json"), os.path.join(ROOT, "setup", "state-outputs.json")):
-        if os.path.exists(path):
-            merged.update(json.load(open(path)).get("KarteStack", {}))
+    paths = [p for p in (os.path.join(ROOT, "data", "outputs.json"), os.path.join(ROOT, "setup", "state-outputs.json")) if os.path.exists(p)]
+    # newest wins, whichever tool deployed last
+    for path in sorted(paths, key=os.path.getmtime):
+        merged.update(json.load(open(path)).get("KarteStack", {}))
     return merged
 
 
@@ -134,10 +135,10 @@ def stage_upload():
             if keys:
                 s3.delete_objects(Bucket=BUCKET, Delete={"Objects": keys})
     print("== upload source files")
-    plan = [("items", os.path.join(DATA, "items.csv"))] + [("events", f) for f in sorted(glob.glob(os.path.join(DATA, "events_*.csv")))] + \
-           [("inquiries", os.path.join(DATA, "inquiries.csv"))]
+    plan = [("items", os.path.join(DATA, "items.tsv"))] + [("events", f) for f in sorted(glob.glob(os.path.join(DATA, "events_*.tsv")))] + \
+           [("inquiries", os.path.join(DATA, "inquiries.tsv"))]
     for kind, f in plan:
-        key = f"inbound/{kind}/{os.path.splitext(os.path.basename(f))[0]}_{RUN}.csv"
+        key = f"inbound/{kind}/{os.path.splitext(os.path.basename(f))[0]}_{RUN}.tsv"
         s3.upload_file(f, BUCKET, key, ExtraArgs={"ServerSideEncryption": "aws:kms"})
         print("  ", key)
 
@@ -189,8 +190,11 @@ def stage_verify():
             if m not in got or not policy.evaluate(got[m])["ok"]:
                 bad.append(("ok-mismatch", m))
     print(f"  members truth={len(truth)} karte={len(got)} | withdrawn={n_wd} ng={n_ng} ok={n_ok} | mismatches={len(bad)} {bad[:3]}")
-    expected = n_ng + n_ok  # deleted members are already excluded from the loop above
-    ok &= not bad and len(got) == expected
+    # exact set comparison (avoids arithmetic drift between runs of this suite)
+    expected = {m for m, t in truth.items() if "WITHDRAWN" not in t["reasons"]} - deleted
+    if set(got) != expected:
+        print("  unexpected:", sorted(set(got) - expected)[:3], "missing:", sorted(expected - set(got))[:3])
+    ok &= not bad and set(got) == expected
 
     print("== rejects report (expect exactly the 2 planted inquiry anomalies)")
     rep = [o["Key"] for o in s3.list_objects_v2(Bucket=BUCKET, Prefix="reports/").get("Contents", [])]
@@ -235,6 +239,15 @@ def stage_verify():
     else:
         # No fallback model by design: until Haiku 5.5 is usable for the account this is expected.
         print("  SKIP: model not invokable yet (Marketplace agreement / account verification)")
+
+    print("== list search (DynamoDB GSIs)")
+    c7, b7 = api("GET", "/karte/search?by=last_purchase&limit=5&asc=true")
+    c8, b8 = api("GET", "/karte/search?by=purchase_count_90d&min=1&limit=5")
+    c9, b9 = api("GET", "/karte/search?by=nope")
+    print("  last_purchase:", c7, b7.get("count"), [m["value"] for m in b7.get("members", [])])
+    print("  purchase_count_90d:", c8, b8.get("count"), [m["value"] for m in b8.get("members", [])])
+    print("  invalid key ->", c9, b9)
+    ok &= c7 == 200 and b7["count"] > 0 and b8["count"] > 0 and "INVALID_BY" in json.dumps(b9)
 
     print("== DELETE API then FULL rebuild keeps the member out")
     n_before = len(got)

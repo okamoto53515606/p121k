@@ -163,14 +163,14 @@ def main() -> None:
                 reasons.append("RECENT_COMPLAINT")
             w.writerow([m, "ng" if reasons else "ok", "|".join(reasons)])
 
-    with open(os.path.join(a.out, "items.csv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["item_id", "item_name", "item_description", "category", "price"])
+    with open(os.path.join(a.out, "items.tsv"), "w", newline="") as f:
+        w = csv.DictWriter(f, fieldnames=["item_id", "item_name", "item_description", "category", "price"], delimiter="\t")
         w.writeheader()
         w.writerows(items.values())
 
     for i in range(0, len(all_events), EVENT_FILE_ROWS):
-        with open(os.path.join(a.out, f"events_{i // EVENT_FILE_ROWS:03d}.csv"), "w", newline="") as f:
-            w = csv.writer(f)
+        with open(os.path.join(a.out, f"events_{i // EVENT_FILE_ROWS:03d}.tsv"), "w", newline="") as f:
+            w = csv.writer(f, delimiter="\t")
             w.writerow(["member_id", "item_id", "event_type", "event_ts", "reason"])
             for e in all_events[i:i + EVENT_FILE_ROWS]:
                 w.writerow([e[1], e[2], e[3], jst_iso(e[0]), e[4]])
@@ -180,8 +180,8 @@ def main() -> None:
     for n, (cat, note) in enumerate([("other", "これは四十文字を超える自由記述の問い合わせ本文を誤って送った想定のテキストです。電話は090-1234-5678"), ("rage", "")]):
         inq_id += 1
         inquiries.append([f"Q{inq_id:07d}", members_l[n], datetime(2019, 10, 4, tzinfo=timezone.utc), cat, note])
-    with open(os.path.join(a.out, "inquiries.csv"), "w", newline="") as f:
-        w = csv.writer(f)
+    with open(os.path.join(a.out, "inquiries.tsv"), "w", newline="") as f:
+        w = csv.writer(f, delimiter="\t")
         w.writerow(["inquiry_id", "member_id", "received_ts", "category", "note"])
         for q in inquiries:
             w.writerow([q[0], q[1], jst_iso(q[2]), q[3], q[4]])

@@ -10,7 +10,7 @@ const template = (ctx: Record<string, string> = {}) => {
 test('every API method requires IAM auth', () => {
   const t = template();
   const methods = t.findResources('AWS::ApiGateway::Method');
-  expect(Object.keys(methods).length).toBe(4);
+  expect(Object.keys(methods).length).toBe(5); // GET/DELETE karte, reco, copy, search
   for (const m of Object.values(methods)) {
     expect((m as any).Properties.AuthorizationType).toBe('AWS_IAM');
   }
@@ -31,7 +31,8 @@ test('one DynamoDB table (karte) on the customer managed key; no tombstone/purge
   const t = template();
   const tables = t.findResources('AWS::DynamoDB::GlobalTable');
   expect(Object.keys(tables).length).toBe(1);
-  expect(JSON.stringify(tables)).not.toContain('GlobalSecondaryIndexes');
+  // the old withdraw/tombstone purge index must be gone (only search indexes remain)
+  expect(JSON.stringify(tables)).not.toContain('purge-index');
   for (const x of Object.values(tables)) {
     expect((x as any).Properties.SSESpecification.SSEType).toBe('KMS');
   }
@@ -102,4 +103,46 @@ test('the task role may invoke only the configured model', () => {
   const json = JSON.stringify(t.findResources('AWS::IAM::Policy'));
   expect(json).toContain('inference-profile/jp.anthropic.claude-haiku-5-5');
   expect(json).not.toContain('inference-profile/jp.anthropic.*');
+});
+
+test('search indexes exist for the list queries (constant partition key)', () => {
+  const t = template();
+  const tables = Object.values(t.findResources('AWS::DynamoDB::GlobalTable')) as any[];
+  const gsis = tables[0].Properties.GlobalSecondaryIndexes ?? [];
+  const names = gsis.map((g: any) => g.IndexName).sort();
+  expect(names).toEqual([
+    'karte-first-purchase', 'karte-first-view', 'karte-last-purchase', 'karte-last-view',
+    'karte-purchase-count-90d', 'karte-view-count-90d',
+  ]);
+  for (const g of gsis) {
+    expect(g.KeySchema).toEqual(expect.arrayContaining([{ AttributeName: 'entity', KeyType: 'HASH' }]));
+    expect(g.Projection.ProjectionType).toBe('KEYS_ONLY');
+  }
+});
+
+test('one IAM user per purpose, each with only its own policy', () => {
+  const t = template();
+  const users = t.findResources('AWS::IAM::User');
+  expect(Object.keys(users).length).toBe(2);
+  const json = JSON.stringify(users);
+  expect(json).toContain('p121k-upload');
+  expect(json).toContain('p121k-api');
+  t.hasResourceProperties('AWS::IAM::ManagedPolicy', { ManagedPolicyName: 'karte-inbound-upload' });
+  t.hasResourceProperties('AWS::IAM::ManagedPolicy', { ManagedPolicyName: 'karte-api-invoke' });
+});
+
+test('API blocks requests from outside Japan by default (WAF geo match)', () => {
+  const t = template();
+  expect(Object.keys(t.findResources('AWS::WAFv2::WebACL')).length).toBe(1);
+  expect(Object.keys(t.findResources('AWS::WAFv2::WebACLAssociation')).length).toBe(1);
+  expect(JSON.stringify(t.findResources('AWS::WAFv2::WebACL'))).toContain('JP');
+  expect(Object.keys(template({ geoBlock: 'false' }).findResources('AWS::WAFv2::WebACL')).length).toBe(0);
+});
+
+test('an S3 upload allow-list denies every other source but the API role', () => {
+  const t = template({ uploadCidrs: '203.0.113.0/24' });
+  const pol = JSON.stringify(t.findResources('AWS::S3::BucketPolicy'));
+  expect(pol).toContain('203.0.113.0/24');
+  expect(pol).toContain('ArnNotLike');
+  expect(Object.keys(template().findResources('AWS::S3::BucketPolicy')).length).toBe(1); // only the TLS rule
 });

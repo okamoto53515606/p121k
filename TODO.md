@@ -5,7 +5,7 @@
 ## 開発
 
 - [x] **Claude Haiku 5.5 の Marketplace 契約**: 2026-11-22 10:47 UTC（19:47 JST）に承諾済み。契約ID `agmt-b398skur7br2wqwqzvp1aovgm` / オファー `offer-u3aih6zr7uw5u` / 製品 `prod-6cyn7tgqazjhu`（Anthropic, PBC「Claude Haiku 5.5 (Amazon Bedrock Edition)」）。`GetFoundationModelAvailability` は `agreementAvailability=AVAILABLE`
-- [ ] **モデルアクセスの付与待ち（AWS 側）**: 契約から3.5時間（2026-11-22 14:15 UTC 時点）経過しても推論は `AccessDeniedException`。原因は Service Quotas の `Cross-region model inference tokens per minute for Anthropic Claude Haiku 5.5` が **0**（既定は1,000万なので quota 引き上げではなく、アクセス自体が未付与）。`tools/probe_haiku55.py` で監視し、付与されたら Playground と `POST /karte/{id}/copy` の `model` が 5.5 になることを確認。AWS サポート窓口への起票が必要（下の「連絡用メモ」）
+- [ ] **モデルアクセスの付与待ち（AWS 側・利用者のアカウント課題）**: 契約から3.5時間（2026-11-22 14:15 UTC 時点）経過しても推論は `AccessDeniedException`。原因は Service Quotas の `Cross-region model inference tokens per minute for Anthropic Claude Haiku 5.5` が **0**（既定は1,000万なので quota 引き上げではなく、アクセス自体が未付与）。`tools/probe_haiku55.py` で監視し、付与されたら Playground と `POST /karte/{id}/copy` の `model` が 5.5 になることを確認。AWS サポート窓口への起票が必要（下の「連絡用メモ」）
 - [x] Haiku 5.5 のバッチ推論の可否を確認 → **非対応**（実機で拒否を確認。文案生成は即時APIのみ）
 - [x] **代替モデルへの自動フォールバックを削除**（黙って別モデルに切り替わらないようにする。使えなければエラー）
 - [x] **退会データが残りうる場所の棚卸しと対処**（原則7に関わる）
@@ -49,7 +49,7 @@
 - [x] Haiku 5.5 の単価を確認（Marketplace オファーの料金表。JPプロファイル $0.11/$0.55）
 - [x] 運用手順書: `docs/operations.md`（PUT、FULL、拒否レポート、障害対応、監査、後片付け、規模）
 - [x] データ仕様のサンプルCSV: `docs/samples/`
-- [x] 「データ主権が東京のみ必須の場合」の代替案: `docs/data-residency-options.md`
+- [x] データ主権の方針: **AWS の日本リージョン（東京・大阪）で完結**。東京単独にはこだわらないため、代替案の資料は不要と判断して削除
 
 ## 連絡用メモ（AWS サポートへ）
 
@@ -68,3 +68,10 @@ Service Quotas では Haiku 5.5 の TPM が 0（既定は 10,000,000）、
 Haiku 4.5 は 5,000,000 で正常に利用できる。
 モデルアクセスの付与をお願いしたい。
 ```
+
+## Haiku の扱い（決定）
+
+- 実装は **Haiku 5.5 前提**のまま（代替モデルへの自動切替はしない）。
+- 利用者の動作確認だけ **`jp.anthropic.claude-haiku-4-5-20251001-v1:0` で10件**行う:
+  `python tools/smoke_copy.py --count 10 --model jp.anthropic.claude-haiku-4-5-20251001-v1:0`
+- 文案は**リアルタイム生成**（`POST /karte/{id}/copy`）。`direction` で訴求点・文体・長さを指示できる。

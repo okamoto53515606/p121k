@@ -33,7 +33,7 @@
 ### 暗号化・通信・コスト
 14. **保管データの漏えいを防ぐために、S3・DynamoDB は専用KMSキー（CMK）で暗号化し、TLSのみ許可、パブリックアクセスを全ブロックする。**
 15. **意図しない常時課金を防ぐために、Personalize はバッチ推論だけを使う。** リアルタイムCampaignは作らない（無リクエストでも最低1TPS分が課金される）。
-16. **データの国外流出を防ぐために、東京リージョンに構築し、Bedrock は `jp.*` 推論プロファイル（東京・大阪のみ）を使う。** 「東京のみ」が必須の要件では Bedrock が使えない点に注意。
+16. **データの国外流出を防ぐために、AWS の日本リージョン（東京・大阪）だけで完結させる。** 保存先は東京。Bedrock は `jp.*` 推論プロファイル（東京・大阪のみ）を使う。API は WAF の国判定で日本国外からの呼び出しを遮断する。
 17. **構築と検証のずれを防ぐために、全リソースを CDK でコード化し、セキュリティ性質を CDK テストで検証する。**
 
 ## 構成
@@ -58,17 +58,23 @@
 - `docs/` 運用手順（`operations.md`）、データ主権の代替案、CSVサンプル
 - `tests/` pytest(moto)、`infra/test/` jest(CDK assertions)、`.github/workflows/ci.yml` で両方を自動実行
 
-## ソースデータ仕様（S3 PUT、UTF-8 CSV、ヘッダ付き）
+## ソースデータ仕様（S3 PUT、UTF-8 TSV、ヘッダ付き）
 
-パス: `s3://<Bucket>/inbound/{items|events|inquiries}/<任意名>.csv`
+詳細は [docs/s3-spec.md](./docs/s3-spec.md)。API は [docs/api-spec.md](./docs/api-spec.md)。
+
+パス: `s3://<Bucket>/inbound/{items|events|inquiries}/<任意名>.tsv`（タブ区切り。`.csv` は受け付けない）
 
 | 種別 | 列（[ ]は任意） | 備考 |
 |---|---|---|
-| items | `item_id, item_name, [item_description], category, price` | 最新ファイルが全件スナップショット |
-| events | `member_id, item_id, event_type, event_ts, [reason]` | `event_type`: `view/like/cart/purchase/return/withdraw`。`event_ts`はISO8601(タイムゾーン付き)。`withdraw`は`item_id`空欄。ファイルは**追記**し、`withdraw`行は消さない |
-| inquiries | `inquiry_id, member_id, received_ts, category, [note]` | 上記原則5 |
+| items | `item_id	item_name	[item_description]	category	price` | 最新ファイルが全件スナップショット |
+| events | `member_id	item_id	event_type	event_ts	[reason]` | `event_type`: `view/like/cart/purchase/return/withdraw`。`event_ts`はISO8601(タイムゾーン付き)。`withdraw`は`item_id`空欄。ファイルは**追記**し、`withdraw`行は消さない |
+| inquiries | `inquiry_id	member_id	received_ts	category	[note]` | 上記原則5 |
+
+`member_id` は **HMAC-SHA256 の16進（32/64桁）のみ**。生のIDは行単位で拒否される（[docs/s3-spec.md](./docs/s3-spec.md) の HMAC 仕様）。
 
 Personalize には `view/like/cart/purchase` だけを渡す（`return` は学習に使わない）。最低 1,000 インタラクション / 25 ユーザー必要。
+
+カルテには **購入・返品・問い合わせを全件**保存する（金額はアイテムマスタの最新単価）。一覧検索は `GET /karte/search`（GSI）で行う。
 
 ## 使い方
 
@@ -107,15 +113,15 @@ npx cdk deploy KarteStack --outputs-file ../data/outputs.json
 
 ## 運用
 
-1. **PUT**: 自社サーバのIAMロールに `karte-inbound-upload` を付与して上記パスへ。
+1. **PUT**: 自社サーバに `karte-inbound-upload` を付与（またはセットアップ画面で S3 用キーを発行）して上記パスへ。
 2. **FULL実行**: Step Functions `karte-reco-pipeline` を起動（学習込みで実証規模で約1時間）。buildだけ試すときは Lambda `Pipeline` に `{"action":"build"}`。
-3. **API呼び出し**: 呼び出し側ロールに `karte-api-invoke` を付与し、SigV4で署名する。
+3. **API呼び出し**: 呼び出し側に `karte-api-invoke` を付与（または API 用キーを発行）し、SigV4で署名する。キーは S3 用と API 用で分ける。
 4. **退会**: events に `withdraw` を追記する。急ぐ場合は `DELETE /karte/{id}`。
 5. **後片付け**: `npx cdk destroy KarteStack` のあと、Personalize の Solution / Solution Version を手動削除する（パイプラインが作るため。FULL成功時は旧バージョンを自動削除する）。
 
 障害時の見方、監視項目、規模の切り替えは [docs/operations.md](./docs/operations.md) を参照。
 自社側（PUTする側）の参考実装は `tools/ingest_side.py`（HMAC仮名化・問い合わせの分類コード化・withdraw出力）。
-入出力CSVの実例は `docs/samples/` にある。
+入出力の実例（TSV）は `docs/samples/` にある。
 
 ## 検証済みの内容（2026-11-22、ap-northeast-1、実証データ1.5万会員・約24万イベント）
 
@@ -125,6 +131,9 @@ npx cdk deploy KarteStack --outputs-file ../data/outputs.json
 - Personalize 全パイプライン成功（学習 約40分）。14,359名にTop-10を反映し、退会者・NG会員への反映は0。
 - 署名付きでも `karte-api-invoke` を持たない IAM ユーザーは 403。APIアクセスログとLambdaログに会員IDは残らない（`member_tag` のみ）。
 - 障害通知（SNS `karte-alerts`）とデータ品質アラーム（拒否行・スキップファイル）がデプロイされ、build のメトリクス（名前空間 `P121K`）が CloudWatch に届くことを確認。
+- 取込は **TSV**。`member_id` は HMAC の16進のみ受け付け、生のIDは行単位で拒否されることを確認。
+- カルテは購入・返品・問い合わせを**全件**保持し、購入/返品にはアイテムマスタの単価が付く。
+- 一覧検索 `GET /karte/search` が GSI で動作（最終購入が近い／購入回数90日がN以上 など）。
 
 ## データ出典とライセンス
 

@@ -42,9 +42,12 @@ class SchemaError(ValueError):
 
 
 def _open_rows(bucket: str, key: str, cols: tuple[set, set]):
-    """Strict header: required columns present, nothing unexpected (e.g. a free-text `body` column)."""
+    """Strict header: required columns present, nothing unexpected (e.g. a free-text `body` column).
+
+    Source files are TSV: item names and inquiry summaries may contain commas.
+    """
     body = c.s3().get_object(Bucket=bucket, Key=key)["Body"]
-    reader = csv.DictReader(io.TextIOWrapper(body, encoding="utf-8-sig", newline=""))
+    reader = csv.DictReader(io.TextIOWrapper(body, encoding="utf-8-sig", newline=""), delimiter="\t")
     names = {n.strip() for n in (reader.fieldnames or [])}
     required, optional = cols
     if required - names:
@@ -54,10 +57,11 @@ def _open_rows(bucket: str, key: str, cols: tuple[set, set]):
     return reader
 
 
-def _list_csv(bucket: str, prefix: str) -> list[dict]:
+def _list_sources(bucket: str, prefix: str) -> list[dict]:
+    """Inbound files are .tsv (commas in text fields would break CSV)."""
     out = []
     for page in c.s3().get_paginator("list_objects_v2").paginate(Bucket=bucket, Prefix=prefix):
-        out.extend(o for o in page.get("Contents", []) if o["Key"].lower().endswith(".csv"))
+        out.extend(o for o in page.get("Contents", []) if o["Key"].lower().endswith(".tsv"))
     return sorted(out, key=lambda o: o["Key"])
 
 
@@ -89,7 +93,7 @@ class Report:
 
 def load_items(bucket: str, report: Report | None = None) -> dict:
     """The newest items file is a full snapshot."""
-    files = _list_csv(bucket, "inbound/items/")
+    files = _list_sources(bucket, "inbound/items/")
     if not files:
         return {}
     key = max(files, key=lambda o: (o["LastModified"], o["Key"]))["Key"]
@@ -143,28 +147,62 @@ def _pass_withdraw(bucket: str, files: list[dict], report: Report) -> tuple[set[
     return withdrawn, max_ts, good
 
 
-def _apply(k: dict, typ: str, ts: int, item_id: str, cat: str) -> None:
+def _apply(k: dict, typ: str, ts: int, item_id: str, item: dict, reason: str, ref: int) -> None:
+    """Keep the full purchase/return history (the operator asked for every PUT row).
+
+    Views/likes/carts are summarised (counts + last N events) because they are only used
+    for recommendations and recency; purchases and returns are the audit trail.
+    """
     k["last_event_ts"] = max(int(k["last_event_ts"]), ts)
     k["counts"][typ] += 1
     k["last_ts"][typ] = max(int(k["last_ts"].get(typ, 0)), ts)
-    if typ == "return":
+    price = int(item.get("price", 0)) if item else 0
+    if typ == "purchase":
+        k["purchases"].append({"ts": ts, "item_id": item_id, "price": price})
+        if not k["first_purchase_ts"] or ts < k["first_purchase_ts"]:
+            k["first_purchase_ts"] = ts
+        k["last_purchase_ts"] = max(int(k["last_purchase_ts"]), ts)
+    elif typ == "return":
+        k["returns"].append({"ts": ts, "item_id": item_id, "reason": reason, "price": price})
         k["returns_ts"].append(ts)
-        if len(k["returns_ts"]) > 4 * MAX_RETURNS:
-            k["returns_ts"] = sorted(k["returns_ts"])[-MAX_RETURNS:]
-    else:
-        if cat:
-            k["categories"][cat] = k["categories"].get(cat, 0) + 1
-    k["recent_events"].append({"ts": ts, "type": typ, "item_id": item_id})
-    if len(k["recent_events"]) > 4 * MAX_RECENT:
-        k["recent_events"] = sorted(k["recent_events"], key=lambda e: e["ts"])[-MAX_RECENT:]
+    elif typ == "view":
+        if not k["first_view_ts"] or ts < k["first_view_ts"]:
+            k["first_view_ts"] = ts
+        k["last_view_ts"] = max(int(k["last_view_ts"]), ts)
+    cat = (item or {}).get("category", "")
+    if cat:
+        k["categories"][cat] = k["categories"].get(cat, 0) + 1
+    if typ != "return":
+        k["recent_events"].append({"ts": ts, "type": typ, "item_id": item_id})
+        if len(k["recent_events"]) > 4 * MAX_RECENT:
+            k["recent_events"] = sorted(k["recent_events"], key=lambda e: e["ts"])[-MAX_RECENT:]
+    # rolling windows for list search (purchases / views per 30, 90, 180 days)
+    w = k["windows"]
+    for days in (30, 90, 180):
+        if ts >= ref - days * 86400:
+            key = f"{typ}_{days}d"
+            w[key] = w.get(key, 0) + 1
 
 
 def _finish(k: dict) -> None:
     k["recent_events"] = sorted(k["recent_events"], key=lambda e: e["ts"])[-MAX_RECENT:]
-    k["returns_ts"] = sorted(k["returns_ts"])[-MAX_RETURNS:]
+    k["returns_ts"] = sorted(k["returns_ts"])
+    k["purchases"].sort(key=lambda x: x["ts"])
+    k["returns"].sort(key=lambda x: x["ts"])
     if len(k["categories"]) > MAX_CATEGORIES:
         k["categories"] = dict(sorted(k["categories"].items(), key=lambda kv: -kv[1])[:MAX_CATEGORIES])
-    k["inquiries"] = sorted(k["inquiries"], key=lambda q: q["ts"])[-MAX_INQUIRIES:]
+    k["inquiries"] = sorted(k["inquiries"], key=lambda q: q["ts"])
+    # flatten the rolling-window counters into top-level numbers (indexed for search)
+    w = k.pop("windows", {})
+    for typ in ("purchase", "view"):
+        for days in (30, 90, 180):
+            k[f"{typ}_count_{days}d"] = int(w.get(f"{typ}_{days}d", 0))
+    size = len(json.dumps(k, ensure_ascii=False, default=str).encode("utf-8"))
+    if size > 300_000:
+        raise ValueError(
+            f"karte for {c.member_log_tag(k['member_id'])} is {size} bytes; "
+            "DynamoDB's 400KB item limit is close. Shorten history retention or split the history item."
+        )
 
 
 def publish_metrics(counts: dict) -> None:
@@ -197,7 +235,7 @@ def _scan_karte(**kw):
 def apply_api_deletes(bucket: str, since: float) -> int:
     """Members deleted through the API while a run was in flight must not be resurrected by that run."""
     n = 0
-    for o in _list_csv(bucket, API_DELETE_PREFIX):
+    for o in _list_sources(bucket, API_DELETE_PREFIX):
         if o["LastModified"].timestamp() < since:
             continue
         try:
@@ -218,7 +256,7 @@ def build(state: dict) -> dict:
     report = Report()
 
     items = load_items(bucket, report)
-    ev_files = _list_csv(bucket, "inbound/events/")
+    ev_files = _list_sources(bucket, "inbound/events/")
     withdrawn, max_ts, ev_files = _pass_withdraw(bucket, ev_files, report)
     ref = max_ts if c.env("POLICY_REFERENCE", "now") == "last_event" and max_ts else int(started)
     cutoff = ref - years * 365 * 86400
@@ -259,7 +297,7 @@ def build(state: dict) -> dict:
                 continue
             seen.add(h)
             k = members.get(mid) or members.setdefault(mid, c.new_karte(mid))
-            _apply(k, typ, ts, item_id, items.get(item_id, {}).get("category", ""))
+            _apply(k, typ, ts, item_id, items.get(item_id, {}), (row.get("reason") or "").strip()[:60], ref)
             if typ in TRAIN_TYPES:
                 inter.writerow([mid, item_id, typ, ts])
                 with_inter.add(mid)
@@ -267,7 +305,7 @@ def build(state: dict) -> dict:
     tmp.close()
 
     seen_inq: set[str] = set()
-    for o in _list_csv(bucket, "inbound/inquiries/"):
+    for o in _list_sources(bucket, "inbound/inquiries/"):
         key = o["Key"]
         try:
             reader = _open_rows(bucket, key, INQUIRY_COLS)
@@ -331,6 +369,7 @@ def build(state: dict) -> dict:
     with t.batch_writer(overwrite_by_pkeys=["member_id"]) as bw:
         for mid, k in members.items():
             k.update(carry.get(mid, {}))
+            k["entity"] = "karte"  # fixed partition key of the search GSIs
             bw.put_item(Item=k)
     stale = existing - set(members)
     with t.batch_writer() as bw:

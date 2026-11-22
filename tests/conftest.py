@@ -9,9 +9,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "lambdas"))
 
 BUCKET = "karte-test"
 M1, M2, M3, M4 = "a" * 32, "b" * 32, "c" * 32, "d" * 32
-ITEMS = "item_id,item_name,item_description,category,price\n1,A,desc,electronics.phone,1000\n2,B,desc,apparel.shoes,2000\n"
-EV_HEADER = "member_id,item_id,event_type,event_ts,reason\n"
-Q_HEADER = "inquiry_id,member_id,received_ts,category,note\n"
+ITEMS = "item_id\titem_name\titem_description\tcategory\tprice\n1\tA\tdesc\telectronics.phone\t1000\n2\tB\tdesc\tapparel.shoes\t2000\n"
+EV_HEADER = "member_id\titem_id\tevent_type\tevent_ts\treason\n"
+Q_HEADER = "inquiry_id\tmember_id\treceived_ts\tcategory\tnote\n"
 
 
 @pytest.fixture
@@ -41,7 +41,7 @@ def put(s3, key: str, text: str):
 
 
 def events(*rows):
-    return EV_HEADER + "".join(",".join(r) + "\n" for r in rows)
+    return EV_HEADER + "".join("\t".join(r) + "\n" for r in rows)
 
 
 def build():

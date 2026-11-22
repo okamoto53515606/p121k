@@ -7,7 +7,9 @@ from datetime import datetime, timedelta, timezone
 import boto3
 from botocore.config import Config
 
-MEMBER_ID_RE = re.compile(r"^[A-Za-z0-9_-]{8,64}$")
+# member_id must already be pseudonymised on the customer side (HMAC-SHA256 hex, 32 or 64 chars).
+# Raw customer IDs must never reach S3: that is the whole point of the design.
+MEMBER_ID_RE = re.compile(r"^[0-9a-f]{32}(?:[0-9a-f]{32})?$")
 ITEM_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 JST = timezone(timedelta(hours=9))
 
@@ -66,6 +68,13 @@ def new_karte(member_id: str) -> dict:
         "categories": {},
         "recent_events": [],
         "returns_ts": [],
-        "inquiries": [],
+        "purchases": [],   # full history from the TSV (not truncated)
+        "returns": [],     # full history with reason and price
+        "inquiries": [],   # full history (category codes only)
         "inquiry_count": 0,
+        "first_purchase_ts": 0,
+        "last_purchase_ts": 0,
+        "first_view_ts": 0,
+        "last_view_ts": 0,
+        "windows": {},     # purchase/view counts per 30/90/180 days, flattened at finish
     }

@@ -12,6 +12,9 @@ export interface Settings {
   allowedCidrs: string;
   auditTrail: boolean;
   modelId: string;
+  geoBlock: boolean;
+  uploadCidrs: string;
+  accessKeyMaxAgeDays: number;
 }
 
 export interface DeployState {
@@ -37,6 +40,9 @@ export const DEFAULT_SETTINGS: Settings = {
   allowedCidrs: "",
   auditTrail: false,
   modelId: "jp.anthropic.claude-haiku-5-5",
+  geoBlock: true,
+  uploadCidrs: "",
+  accessKeyMaxAgeDays: 180,
 };
 
 const STATE_PATH = resolve(process.cwd(), "setup-state.json");
@@ -78,6 +84,10 @@ export function validateSettings(input: unknown): { ok: true; settings: Settings
   if (allowedCidrs && !/^[0-9a-fA-F.:/,\s]+$/.test(allowedCidrs)) return { ok: false, error: "IP制限は CIDR をカンマ区切りで指定してください" };
   const modelId = String(b.modelId ?? DEFAULT_SETTINGS.modelId).trim();
   if (!/^[a-z0-9.-]+$/.test(modelId)) return { ok: false, error: "モデルIDの形式が不正です" };
+  const keyDays = Number(b.accessKeyMaxAgeDays ?? DEFAULT_SETTINGS.accessKeyMaxAgeDays);
+  if (!Number.isInteger(keyDays) || keyDays < 1 || keyDays > 365) return { ok: false, error: "アクセスキーの有効期間は1〜365日で指定してください" };
+  const uploadCidrs = String(b.uploadCidrs ?? "").trim();
+  if (uploadCidrs && !/^[0-9a-fA-F.:/,\s]+$/.test(uploadCidrs)) return { ok: false, error: "S3のIP制限は CIDR をカンマ区切りで指定してください" };
   return {
     ok: true,
     settings: {
@@ -87,6 +97,9 @@ export function validateSettings(input: unknown): { ok: true; settings: Settings
       allowedCidrs,
       auditTrail: Boolean(b.auditTrail),
       modelId,
+      geoBlock: b.geoBlock !== false,
+      uploadCidrs: String(b.uploadCidrs ?? "").trim(),
+      accessKeyMaxAgeDays: Number(b.accessKeyMaxAgeDays ?? DEFAULT_SETTINGS.accessKeyMaxAgeDays),
     },
   };
 }

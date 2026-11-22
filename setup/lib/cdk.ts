@@ -16,12 +16,15 @@ export function contextArgs(s: Settings): string[] {
     "-c", `weeklyFull=${s.weeklyFull ? "true" : "false"}`,
     "-c", `auditTrail=${s.auditTrail ? "true" : "false"}`,
     "-c", `modelId=${s.modelId}`,
+    "-c", `geoBlock=${s.geoBlock ? "true" : "false"}`,
+    "-c", `accessKeyMaxAgeDays=${s.accessKeyMaxAgeDays}`,
     // 本番は常に "now"（基準時刻＝実行時刻）。過去データの検証は CLI から
     // `-c policyReference=last_event` を明示してデプロイする。
     "-c", "policyReference=now",
   ];
   if (s.alertEmail) args.push("-c", `alertEmail=${s.alertEmail}`);
   if (s.allowedCidrs) args.push("-c", `allowedCidrs=${s.allowedCidrs.replace(/\s+/g, "")}`);
+  if (s.uploadCidrs) args.push("-c", `uploadCidrs=${s.uploadCidrs.replace(/\s+/g, "")}`);
   return args;
 }
 

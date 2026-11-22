@@ -53,9 +53,10 @@ def withdraw_row(member_id: str, event_ts: str, reason: str = "USER_REQUEST") ->
 
 
 def _write(path: str, header: list[str], rows: list[list[str]]) -> None:
+    """TSV: item names and inquiry summaries may contain commas."""
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
+        w = csv.writer(f, delimiter="\t")
         w.writerow(header)
         w.writerows(rows)
     print(f"  wrote {path} ({len(rows)} rows)")
@@ -86,8 +87,8 @@ def main() -> int:
         inquiries.append([f"Q{n:07d}", mid, now, cat, note])
     # --------------------------------------------------------------------
 
-    _write(os.path.join(a.out, "events", "events.csv"), ["member_id", "item_id", "event_type", "event_ts", "reason"], events)
-    _write(os.path.join(a.out, "inquiries", "inquiries.csv"), ["inquiry_id", "member_id", "received_ts", "category", "note"], inquiries)
+    _write(os.path.join(a.out, "events", "events.tsv"), ["member_id", "item_id", "event_type", "event_ts", "reason"], events)
+    _write(os.path.join(a.out, "inquiries", "inquiries.tsv"), ["inquiry_id", "member_id", "received_ts", "category", "note"], inquiries)
     print("next: aws s3 cp <dir> s3://<KarteBucketName>/inbound/ --recursive --sse aws:kms")
     return 0
 

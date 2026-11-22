@@ -9,6 +9,9 @@ type Settings = {
   allowedCidrs: string;
   auditTrail: boolean;
   modelId: string;
+  geoBlock: boolean;
+  uploadCidrs: string;
+  accessKeyMaxAgeDays: number;
 };
 type Deploy = { startedAt: string; finishedAt?: string; exitCode?: number; action: "deploy" | "destroy" };
 type Stack = { status: string; outputs: Record<string, string>; updatedAt?: string } | null;
@@ -21,7 +24,7 @@ type StateResp = {
 const EMPTY: StateResp = {
   connected: false,
   settings: { retentionYears: 3, weeklyFull: false, alertEmail: "", allowedCidrs: "", auditTrail: false,
-    modelId: "jp.anthropic.claude-haiku-5-5" },
+    modelId: "jp.anthropic.claude-haiku-5-5", geoBlock: true, uploadCidrs: "", accessKeyMaxAgeDays: 180 },
   stack: null, execution: null, log: "",
 };
 
@@ -32,6 +35,8 @@ export default function Page() {
   const [form, setForm] = useState({ accessKeyId: "", secretAccessKey: "", sessionToken: "", region: "ap-northeast-1" });
   const [settings, setSettings] = useState<Settings>(EMPTY.settings);
   const [selftest, setSelftest] = useState<null | { unsigned: number; signed: number; ok: boolean; note: string; target: string }>(null);
+  const [keys, setKeys] = useState<null | Record<string, unknown>>(null);
+  const [issued, setIssued] = useState<null | { kind: string; accessKeyId: string; secretAccessKey: string; expires: string; warning: string }>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -172,9 +177,23 @@ export default function Page() {
             <input type="checkbox" checked={settings.weeklyFull} onChange={(e) => setSettings({ ...settings, weeklyFull: e.target.checked })} />
             <span>週次 FULL を自動実行する（毎週日曜 03:00 JST）</span>
           </label>
+          <div className="row">
+            <label className="field"><span>S3 の IP 許可リスト（CIDR・任意）</span>
+              <input type="text" value={settings.uploadCidrs} placeholder="203.0.113.0/24"
+                onChange={(e) => setSettings({ ...settings, uploadCidrs: e.target.value })} />
+            </label>
+            <label className="field"><span>アクセスキーの有効期間（日）</span>
+              <input type="number" min={1} max={365} value={settings.accessKeyMaxAgeDays}
+                onChange={(e) => setSettings({ ...settings, accessKeyMaxAgeDays: Number(e.target.value) })} />
+            </label>
+          </div>
           <label className="check">
             <input type="checkbox" checked={settings.auditTrail} onChange={(e) => setSettings({ ...settings, auditTrail: e.target.checked })} />
             <span>CloudTrail のデータイベントを有効にする（S3 への読み書きを記録。課金あり）</span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={settings.geoBlock} onChange={(e) => setSettings({ ...settings, geoBlock: e.target.checked })} />
+            <span>海外IPからの API 呼び出しを遮断する（WAF の国判定で日本以外をブロック。課金あり）</span>
           </label>
         </section>
 
@@ -216,19 +235,19 @@ export default function Page() {
           </p>
           <table className="kv">
             <tbody>
-              <tr><th>アイテムマスタ</th><td><code>s3://{bucket}/inbound/items/&lt;任意名&gt;.csv</code><br />
+              <tr><th>アイテムマスタ</th><td><code>s3://{bucket}/inbound/items/&lt;任意名&gt;.tsv</code><br />
                 <span className="muted small">最新ファイルが全件スナップショット。列: <code>item_id, item_name, item_description, category, price</code></span></td></tr>
-              <tr><th>行動履歴</th><td><code>s3://{bucket}/inbound/events/&lt;任意名&gt;.csv</code><br />
-                <span className="muted small">追記する。列: <code>member_id, item_id, event_type, event_ts, reason</code>（<code>event_type</code> は view / like / cart / purchase / return / withdraw）</span></td></tr>
-              <tr><th>問い合わせ</th><td><code>s3://{bucket}/inbound/inquiries/&lt;任意名&gt;.csv</code><br />
+              <tr><th>行動履歴</th><td><code>s3://{bucket}/inbound/events/&lt;任意名&gt;.tsv</code><br />
+                <span className="muted small">追記する（タブ区切り）。列: <code>member_id, item_id, event_type, event_ts, reason</code>（<code>event_type</code> は view / like / cart / purchase / return / withdraw）</span></td></tr>
+              <tr><th>問い合わせ</th><td><code>s3://{bucket}/inbound/inquiries/&lt;任意名&gt;.tsv</code><br />
                 <span className="muted small">分類コードのみ。列: <code>inquiry_id, member_id, received_ts, category, note</code>（<code>note</code> は <code>other</code> のときだけ40字以内）</span></td></tr>
               <tr><th>必要な IAM</th><td><code>{outputs.UploadPolicyArn ?? "karte-inbound-upload"}</code></td></tr>
             </tbody>
           </table>
           <ul className="tight">
             <li><strong>退会</strong>は <code>withdraw</code> 行を追記するだけ。その行は消さない（毎回の FULL でこの会員を丸ごと除外する根拠になる）。</li>
-            <li>書式は UTF-8・ヘッダ付き。列の過不足はファイルごと拒否され、<code>reports/&lt;run&gt;/rejects.csv</code> に残る。</li>
-            <li>サンプルは <code>docs/samples/</code>、変換の参考実装は <code>tools/ingest_side.py</code>。</li>
+            <li>書式は TSV（タブ区切り）・UTF-8・ヘッダ付き。列の過不足はファイルごと拒否され、<code>reports/&lt;run&gt;/rejects.csv</code> に残る。</li>
+            <li>仕様は <code>docs/s3-spec.md</code>、サンプルは <code>docs/samples/</code>、変換の参考実装は <code>tools/ingest_side.py</code>。</li>
           </ul>
         </section>
 
@@ -297,6 +316,34 @@ curl -X DELETE … "${apiBase}/karte/<memberId>"`}</pre>
               <div className="muted small">{selftest.note}</div>
             </div>
           )}
+        </section>
+
+        <section className="card" id="keys">
+          <h3 style={{ fontSize: 13, marginBottom: 4 }}>アクセスキー（S3用 / API用を分けて発行）</h3>
+          <p className="muted small">
+            発行した秘密キーは<strong>この画面に一度だけ</strong>表示されます。期限を過ぎたキーは日次ジョブが自動で無効化・削除します。
+            可能なら長期キーは使わず、IAM ロール（EC2/ECS/EKS/OIDC/Roles Anywhere）を推奨します（`docs/iam-for-callers.md`）。
+          </p>
+          <div className="actions">
+            <button disabled={!deployed || busy !== null} onClick={async () => { setKeys(await (await fetch("/api/keys")).json()); }}>現在のキーを表示</button>
+            <button disabled={!deployed || busy !== null} onClick={async () => {
+              const r = await fetch("/api/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "upload" }) });
+              const j = await r.json();
+              if (r.ok) { setIssued(j); setMsg({ kind: "warn", text: "S3用キーを発行しました。秘密キーは一度しか表示されません。" }); } else setMsg({ kind: "ng", text: j.error });
+            }}>S3用キーを発行</button>
+            <button disabled={!deployed || busy !== null} onClick={async () => {
+              const r = await fetch("/api/keys", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ kind: "api" }) });
+              const j = await r.json();
+              if (r.ok) { setIssued(j); setMsg({ kind: "warn", text: "API用キーを発行しました。秘密キーは一度しか表示されません。" }); } else setMsg({ kind: "ng", text: j.error });
+            }}>API用キーを発行</button>
+          </div>
+          {issued && (
+            <div className="notice warn" style={{ marginTop: 10 }}>
+              <div>{issued.warning}</div>
+              <pre>{`AWS_ACCESS_KEY_ID=${issued.accessKeyId}\nAWS_SECRET_ACCESS_KEY=${issued.secretAccessKey}\n有効期限: ${new Date(issued.expires).toLocaleString("ja-JP")}`}</pre>
+            </div>
+          )}
+          {keys && <pre>{JSON.stringify(keys, null, 2)}</pre>}
         </section>
 
         <section className="card" id="destroy">

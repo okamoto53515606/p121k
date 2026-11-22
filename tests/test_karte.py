@@ -21,11 +21,11 @@ def test_mask_pii():
 
 
 def test_build_counts_categories_and_dedup(aws):
-    put(aws, "inbound/items/i.csv", ITEMS)
+    put(aws, "inbound/items/i.tsv", ITEMS)
     rows = [(M1, "1", "view", "2026-01-01T10:00:00+09:00", ""), (M1, "1", "purchase", "2026-01-01T10:05:00+09:00", ""),
             (M1, "2", "like", "2026-01-01T10:06:00+09:00", "")]
-    put(aws, "inbound/events/e1.csv", events(*rows))
-    put(aws, "inbound/events/e2_resent.csv", events(*rows))  # overlapping re-send must not double count
+    put(aws, "inbound/events/e1.tsv", events(*rows))
+    put(aws, "inbound/events/e2_resent.tsv", events(*rows))  # overlapping re-send must not double count
     c = build()
     assert c["members"] == 1 and c["duplicate_rows"] == 3 and c["event_rows"] == 3
     k = karte(M1)
@@ -35,21 +35,21 @@ def test_build_counts_categories_and_dedup(aws):
 
 
 def test_build_is_idempotent_and_removes_members_no_longer_in_source(aws):
-    put(aws, "inbound/events/a.csv", events((M1, "1", "view", "2026-01-01T10:00:00+09:00", ""), (M2, "1", "view", "2026-01-01T10:00:00+09:00", "")))
+    put(aws, "inbound/events/a.tsv", events((M1, "1", "view", "2026-01-01T10:00:00+09:00", ""), (M2, "1", "view", "2026-01-01T10:00:00+09:00", "")))
     build()
     assert all_members() == {M1, M2}
-    aws.delete_object(Bucket=BUCKET, Key="inbound/events/a.csv")
-    put(aws, "inbound/events/b.csv", events((M1, "1", "view", "2026-01-01T10:00:00+09:00", "")))
+    aws.delete_object(Bucket=BUCKET, Key="inbound/events/a.tsv")
+    put(aws, "inbound/events/b.tsv", events((M1, "1", "view", "2026-01-01T10:00:00+09:00", "")))
     c = build()
     assert all_members() == {M1} and c["stale_removed"] == 1
     assert build()["members"] == 1
 
 
 def test_withdraw_removes_member_everywhere_regardless_of_order(aws):
-    put(aws, "inbound/items/i.csv", ITEMS)
+    put(aws, "inbound/items/i.tsv", ITEMS)
     # withdraw arrives in an *older* file than later events; the member still disappears completely
-    put(aws, "inbound/events/a.csv", events((M2, "", "withdraw", "2026-01-02T10:00:00+09:00", "UNUSED"), (M1, "1", "view", "2026-01-01T10:00:00+09:00", "")))
-    put(aws, "inbound/events/b.csv", events((M2, "1", "view", "2026-01-01T10:00:00+09:00", ""), (M2, "2", "purchase", "2026-02-01T10:00:00+09:00", "")))
+    put(aws, "inbound/events/a.tsv", events((M2, "", "withdraw", "2026-01-02T10:00:00+09:00", "UNUSED"), (M1, "1", "view", "2026-01-01T10:00:00+09:00", "")))
+    put(aws, "inbound/events/b.tsv", events((M2, "1", "view", "2026-01-01T10:00:00+09:00", ""), (M2, "2", "purchase", "2026-02-01T10:00:00+09:00", "")))
     c = build()
     assert all_members() == {M1} and c["withdrawn_excluded"] == 1 and c["dropped_withdrawn_rows"] == 3  # incl. the withdraw row itself
     code, body = call("GET", "/karte/{memberId}", M2)
@@ -62,16 +62,16 @@ def test_withdraw_removes_member_everywhere_regardless_of_order(aws):
 
 
 def test_retention_drops_old_rows(aws):
-    put(aws, "inbound/events/a.csv", events((M1, "1", "view", "2020-01-01T10:00:00+09:00", ""), (M1, "1", "view", "2026-01-01T10:00:00+09:00", ""),
+    put(aws, "inbound/events/a.tsv", events((M1, "1", "view", "2020-01-01T10:00:00+09:00", ""), (M1, "1", "view", "2026-01-01T10:00:00+09:00", ""),
                                             (M3, "1", "view", "2020-01-01T10:00:00+09:00", "")))
     c = build()
     assert c["dropped_expired_rows"] == 2 and all_members() == {M1} and karte(M1)["counts"]["view"] == 1
 
 
 def test_validation_rejects_rows_and_files(aws):
-    put(aws, "inbound/events/a.csv", events(("short", "1", "view", "2026-01-01T10:00:00+09:00", ""), (M1, "1", "explode", "2026-01-01T10:00:00+09:00", ""),
+    put(aws, "inbound/events/a.tsv", events(("short", "1", "view", "2026-01-01T10:00:00+09:00", ""), (M1, "1", "explode", "2026-01-01T10:00:00+09:00", ""),
                                             (M1, "1", "view", "not-a-date", ""), (M1, "1", "view", "2026-01-01T10:00:00+09:00", "")))
-    put(aws, "inbound/events/nohdr.csv", "a,b\n1,2\n")
+    put(aws, "inbound/events/nohdr.tsv", "a\tb\n1\t2\n")
     c = build()
     assert c["rejected_rows"] == 3 and len(c["skipped_files"]) == 1 and c["members"] == 1
     rep = aws.list_objects_v2(Bucket=BUCKET, Prefix="reports/")["Contents"][0]["Key"]
@@ -79,8 +79,8 @@ def test_validation_rejects_rows_and_files(aws):
 
 
 def test_return_spike_makes_contact_ng_and_blocks_copy_and_reco(aws):
-    put(aws, "inbound/items/i.csv", ITEMS)
-    put(aws, "inbound/events/a.csv", events((M1, "1", "purchase", "2026-01-01T10:00:00+09:00", ""), (M1, "1", "return", "2026-01-03T10:00:00+09:00", "DEFECT"),
+    put(aws, "inbound/items/i.tsv", ITEMS)
+    put(aws, "inbound/events/a.tsv", events((M1, "1", "purchase", "2026-01-01T10:00:00+09:00", ""), (M1, "1", "return", "2026-01-03T10:00:00+09:00", "DEFECT"),
                                             (M1, "2", "return", "2026-01-04T10:00:00+09:00", "SIZE")))
     build()
     assert call("GET", "/karte/{memberId}", M1)[1]["contact"] == {"ok": False, "reasons": ["RETURN_SPIKE"]}
@@ -89,12 +89,12 @@ def test_return_spike_makes_contact_ng_and_blocks_copy_and_reco(aws):
 
 
 def test_inquiries_are_codes_only(aws):
-    put(aws, "inbound/events/a.csv", events((M1, "1", "view", "2026-01-05T09:00:00+09:00", ""), (M2, "1", "view", "2026-01-05T09:00:00+09:00", "")))
-    put(aws, "inbound/inquiries/q.csv", Q_HEADER +
-        f"Q1,{M1},2026-01-05T10:00:00+09:00,complaint,ignored for non-other\n"
-        f"Q2,{M2},2026-01-05T10:00:00+09:00,other,ポイント失効の相談 090-1111-2222\n"
-        f"Q3,{M2},2026-01-05T11:00:00+09:00,other,{'長い自由記述' * 10}\n"
-        f"Q4,{M2},2026-01-05T11:00:00+09:00,rage,x\n")
+    put(aws, "inbound/events/a.tsv", events((M1, "1", "view", "2026-01-05T09:00:00+09:00", ""), (M2, "1", "view", "2026-01-05T09:00:00+09:00", "")))
+    put(aws, "inbound/inquiries/q.tsv", Q_HEADER +
+        f"Q1\t{M1}\t2026-01-05T10:00:00+09:00\tcomplaint\tignored for non-other\n"
+        f"Q2\t{M2}\t2026-01-05T10:00:00+09:00\tother\tポイント失効の相談 090-1111-2222\n"
+        f"Q3\t{M2}\t2026-01-05T11:00:00+09:00\tother\t{'長い自由記述' * 10}\n"
+        f"Q4\t{M2}\t2026-01-05T11:00:00+09:00\trage\tx\n")
     c = build()
     assert c["inquiry_rows"] == 2 and c["rejected_rows"] == 2
     assert "note" not in karte(M1)["inquiries"][0]
@@ -105,13 +105,13 @@ def test_inquiries_are_codes_only(aws):
 
 
 def test_inquiry_file_with_free_text_column_is_refused(aws):
-    put(aws, "inbound/inquiries/q.csv", "inquiry_id,member_id,received_ts,category,body\nQ1," + M1 + ",2026-01-05T10:00:00+09:00,complaint,全文テキスト\n")
+    put(aws, "inbound/inquiries/q.tsv", "inquiry_id\tmember_id\treceived_ts\tcategory\tbody\nQ1\t" + M1 + "\t2026-01-05T10:00:00+09:00\tcomplaint\t全文テキスト\n")
     c = build()
     assert c["members"] == 0 and "unexpected columns" in c["skipped_files"][0]["reason"]
 
 
 def test_api_delete_records_withdraw_and_survives_next_full(aws):
-    put(aws, "inbound/events/a.csv", events((M3, "1", "view", "2026-01-01T10:00:00+09:00", ""), (M4, "1", "view", "2026-01-01T10:00:00+09:00", "")))
+    put(aws, "inbound/events/a.tsv", events((M3, "1", "view", "2026-01-01T10:00:00+09:00", ""), (M4, "1", "view", "2026-01-01T10:00:00+09:00", "")))
     build()
     code, body = call("DELETE", "/karte/{memberId}", M3)
     assert code == 200 and body["deleted"] and karte(M3) is None
@@ -124,7 +124,7 @@ def test_api_delete_records_withdraw_and_survives_next_full(aws):
 
 def test_delete_during_run_is_not_resurrected(aws):
     import full
-    put(aws, "inbound/events/a.csv", events((M3, "1", "view", "2026-01-01T10:00:00+09:00", "")))
+    put(aws, "inbound/events/a.tsv", events((M3, "1", "view", "2026-01-01T10:00:00+09:00", "")))
     st = full.build({})
     call("DELETE", "/karte/{memberId}", M3)
     common.karte_table().put_item(Item={"member_id": M3, "counts": {}})  # simulate a stale write landing afterwards
@@ -133,8 +133,8 @@ def test_delete_during_run_is_not_resurrected(aws):
 
 
 def test_reco_carried_over_and_loaded_with_item_names(aws):
-    put(aws, "inbound/items/i.csv", ITEMS)
-    put(aws, "inbound/events/a.csv", events((M1, "1", "view", "2026-01-01T10:00:00+09:00", ""), (M2, "2", "view", "2026-01-01T10:00:00+09:00", "")))
+    put(aws, "inbound/items/i.tsv", ITEMS)
+    put(aws, "inbound/events/a.tsv", events((M1, "1", "view", "2026-01-01T10:00:00+09:00", ""), (M2, "2", "view", "2026-01-01T10:00:00+09:00", "")))
     st = pipeline.handler({"action": "build"}, None)
     out = "\n".join(json.dumps({"input": {"userId": m}, "output": {"recommendedItems": ["1", "2", "999"], "scores": [0.9, 0.1, 0.05]}}) for m in (M1, M2, M3))
     aws.put_object(Bucket=BUCKET, Key=f"personalize/output/{st['run']}/x.json.out", Body=out.encode())
@@ -170,7 +170,7 @@ def test_policy_window_and_missing_karte():
 
 
 def test_replay_reference_ignores_withdraw_rows(aws):
-    put(aws, "inbound/events/a.csv", events((M1, "1", "view", "2020-01-01T10:00:00+09:00", ""), (M2, "1", "view", "2020-01-01T10:00:00+09:00", "")))
+    put(aws, "inbound/events/a.tsv", events((M1, "1", "view", "2020-01-01T10:00:00+09:00", ""), (M2, "1", "view", "2020-01-01T10:00:00+09:00", "")))
     build()
     call("DELETE", "/karte/{memberId}", M2)  # stamps a withdraw row with the current time
     c = build()
@@ -179,8 +179,8 @@ def test_replay_reference_ignores_withdraw_rows(aws):
 
 def test_copy_works_with_decimal_prices_from_dynamodb(aws, monkeypatch):
     """DynamoDB returns Decimal; the prompt must still be JSON-serializable."""
-    put(aws, "inbound/items/i.csv", ITEMS)
-    put(aws, "inbound/events/e.csv", events((M1, "1", "view", "2026-01-01T10:00:00+09:00", "")))
+    put(aws, "inbound/items/i.tsv", ITEMS)
+    put(aws, "inbound/events/e.tsv", events((M1, "1", "view", "2026-01-01T10:00:00+09:00", "")))
     build()
     c = common.karte_table()
     k = c.get_item(Key={"member_id": M1})["Item"]
@@ -198,3 +198,53 @@ def test_copy_works_with_decimal_prices_from_dynamodb(aws, monkeypatch):
     monkeypatch.setattr(api.llm, "generate_copy", fake)
     code, body = call("POST", "/karte/{memberId}/copy", M1, {"channel": "mail"})
     assert code == 200 and seen["recommended_items"][0]["price_jpy"] == 1000
+
+
+def test_raw_member_id_is_rejected(aws):
+    """Raw IDs must never be ingested: only HMAC hex (32 or 64 chars) is accepted."""
+    put(aws, "inbound/events/a.tsv", events(("member-0001", "1", "view", "2026-01-01T10:00:00+09:00", ""),
+                                            (M1, "1", "view", "2026-01-01T10:00:00+09:00", "")))
+    c = build()
+    assert c["members"] == 1 and c["rejected_rows"] == 1 and all_members() == {M1}
+    key = sorted(o["Key"] for o in aws.list_objects_v2(Bucket=BUCKET, Prefix="reports/")["Contents"])[-1]
+    body = aws.get_object(Bucket=BUCKET, Key=key)["Body"].read().decode()
+    assert "bad member_id" in body
+
+
+def test_purchase_return_and_inquiry_history_is_complete_with_prices(aws):
+    put(aws, "inbound/items/i.tsv", ITEMS)
+    put(aws, "inbound/events/a.tsv", events(
+        (M1, "1", "view", "2026-01-01T10:00:00+09:00", ""),
+        (M1, "1", "purchase", "2026-01-02T10:00:00+09:00", ""),
+        (M1, "2", "purchase", "2026-01-03T10:00:00+09:00", ""),
+        (M1, "2", "return", "2026-01-04T10:00:00+09:00", "SIZE")))
+    put(aws, "inbound/inquiries/q.tsv", Q_HEADER +
+        "".join(f"Q{i}\t{M1}\t2026-01-0{i}T10:00:00+09:00\tquestion\t\n" for i in range(1, 6)))
+    build()
+    k = karte(M1)
+    # every purchase/return row is kept, with the item master price attached
+    assert [p["item_id"] for p in k["purchases"]] == ["1", "2"]
+    assert [p["price"] for p in k["purchases"]] == [1000, 2000]
+    assert k["returns"][0] == {**k["returns"][0], "item_id": "2", "reason": "SIZE", "price": 2000}
+    # all 5 inquiries are kept (previously capped at 10, now unbounded)
+    assert len(k["inquiries"]) == 5
+    # list-search attributes
+    assert k["first_purchase_ts"] > 0 and k["last_purchase_ts"] >= k["first_purchase_ts"]
+    assert k["first_view_ts"] > 0 and k["last_view_ts"] > 0
+    for f in ("purchase_count_30d", "purchase_count_90d", "purchase_count_180d",
+              "view_count_30d", "view_count_90d", "view_count_180d"):
+        assert f in k
+
+
+def test_copy_direction_is_passed_to_the_prompt(aws, monkeypatch):
+    put(aws, "inbound/events/a.tsv", events((M1, "1", "view", "2026-01-01T10:00:00+09:00", "")))
+    build()
+    seen = {}
+
+    def fake(ctx):
+        seen.update(ctx)
+        return {"subject": "s", "body": "{{customer_name}} 様 b", "model": "m"}
+
+    monkeypatch.setattr(api.llm, "generate_copy", fake)
+    code, _ = call("POST", "/karte/{memberId}/copy", M1, {"channel": "mail", "direction": "再来店を促す。絵文字なし"})
+    assert code == 200 and seen["direction"] == "再来店を促す。絵文字なし"
