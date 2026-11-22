@@ -1,3 +1,4 @@
+import hashlib
 import os
 import re
 import time
@@ -30,6 +31,12 @@ def ddb():
 
 def s3():
     return boto3.client("s3", config=_cfg)
+
+
+def member_log_tag(member_id: str) -> str:
+    """Short stable tag for logs. The member ID itself is never logged, so a withdrawn member's
+    pseudonym does not linger in CloudWatch Logs after the karte is deleted."""
+    return hashlib.sha256(member_id.encode("utf-8")).hexdigest()[:10]
 
 
 def karte_table():

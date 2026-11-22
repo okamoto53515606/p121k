@@ -16,8 +16,8 @@ def call(method, resource, mid, body=None):
 
 
 def test_mask_pii():
-    t = mask("佐藤太郎です。電話は090-1234-5678、メールはa.b@example.com、〒150-0001")
-    assert "090" not in t and "example.com" not in t and "佐藤太郎" not in t and "150-0001" not in t
+    t = mask("佐藤様です。電話は090-1234-5678、メールはa.b@example.com、〒150-0001")
+    assert "090" not in t and "example.com" not in t and "佐藤" not in t and "150-0001" not in t
 
 
 def test_build_counts_categories_and_dedup(aws):
@@ -175,3 +175,26 @@ def test_replay_reference_ignores_withdraw_rows(aws):
     call("DELETE", "/karte/{memberId}", M2)  # stamps a withdraw row with the current time
     c = build()
     assert all_members() == {M1} and c.get("dropped_expired_rows", 0) == 0
+
+
+def test_copy_works_with_decimal_prices_from_dynamodb(aws, monkeypatch):
+    """DynamoDB returns Decimal; the prompt must still be JSON-serializable."""
+    put(aws, "inbound/items/i.csv", ITEMS)
+    put(aws, "inbound/events/e.csv", events((M1, "1", "view", "2026-01-01T10:00:00+09:00", "")))
+    build()
+    c = common.karte_table()
+    k = c.get_item(Key={"member_id": M1})["Item"]
+    k["reco"] = {"items": [{"item_id": "1", "item_name": "A", "category": "electronics.phone",
+                            "price": k["counts"]["view"].__class__(1000), "score": "0.5"}]}
+    c.put_item(Item=k)
+
+    seen = {}
+
+    def fake(ctx):
+        json.dumps(ctx)  # raises TypeError if any Decimal leaks through
+        seen.update(ctx)
+        return {"subject": "s", "body": "{{customer_name}} 様 b", "model": "m"}
+
+    monkeypatch.setattr(api.llm, "generate_copy", fake)
+    code, body = call("POST", "/karte/{memberId}/copy", M1, {"channel": "mail"})
+    assert code == 200 and seen["recommended_items"][0]["price_jpy"] == 1000

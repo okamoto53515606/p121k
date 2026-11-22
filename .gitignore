@@ -13,6 +13,11 @@ __pycache__/
 
 # node / cdk
 node_modules/
+setup/.next/
+setup/.state/
+setup/setup-state.json
+setup/state-outputs.json
+next-env.d.ts
 infra/dist/
 infra/cdk.out/
 cdk.out/

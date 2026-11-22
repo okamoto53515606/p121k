@@ -1,6 +1,8 @@
-"""Bedrock (Claude Haiku via jp.* inference profile) – campaign copy generation only.
+"""Bedrock (Claude Haiku 5.5 via the JP inference profile) – campaign copy generation only.
 
 Inquiry classification is done on the customer's side; only category codes reach AWS.
+There is no fallback model: if Haiku 5.5 is unavailable the request fails loudly, so a
+silent downgrade can never change the wording or the residency assumptions.
 """
 import json
 import os
@@ -8,12 +10,10 @@ import re
 
 import boto3
 from botocore.config import Config
-from botocore.exceptions import ClientError
 
 from pii import mask
 
 _client = None
-_FALLBACK_ERRORS = ("AccessDeniedException", "ResourceNotFoundException", "ValidationException", "ThrottlingException", "ModelNotReadyException")
 
 
 def client():
@@ -23,32 +23,32 @@ def client():
     return _client
 
 
-def _models() -> list[str]:
-    return [m for m in (os.environ.get("MODEL_ID"), os.environ.get("FALLBACK_MODEL_ID")) if m]
+def model_id() -> str:
+    return os.environ.get("MODEL_ID", "jp.anthropic.claude-haiku-5-5")
 
 
 def converse(system: str, user: str, max_tokens: int = 700) -> tuple[str, str]:
-    """Try MODEL_ID then FALLBACK_MODEL_ID. Returns (text, model_used)."""
-    last = None
-    for model in _models():
-        extra = {"thinking": {"type": "disabled"}} if "haiku-5-5" in model else None
-        for use_extra in ([True, False] if extra else [False]):
-            kwargs = dict(
-                modelId=model,
-                system=[{"text": system}],
-                messages=[{"role": "user", "content": [{"text": user}]}],
-                inferenceConfig={"maxTokens": max_tokens, "temperature": 0},
-            )
-            if use_extra:
-                kwargs["additionalModelRequestFields"] = extra
-            try:
-                r = client().converse(**kwargs)
-                return "".join(b.get("text", "") for b in r["output"]["message"]["content"]), model
-            except ClientError as e:
-                last = e
-                if e.response["Error"]["Code"] not in _FALLBACK_ERRORS:
-                    raise
-    raise last or RuntimeError("no model configured")
+    """Returns (text, model_used). Raises if the model is unavailable."""
+    model = model_id()
+    extra = {"thinking": {"type": "disabled"}} if "haiku-5-5" in model else None
+    for use_extra in ([True, False] if extra else [False]):
+        kwargs = dict(
+            modelId=model,
+            system=[{"text": system}],
+            messages=[{"role": "user", "content": [{"text": user}]}],
+            inferenceConfig={"maxTokens": max_tokens, "temperature": 0},
+        )
+        if use_extra:
+            kwargs["additionalModelRequestFields"] = extra
+        try:
+            r = client().converse(**kwargs)
+            return "".join(b.get("text", "") for b in r["output"]["message"]["content"]), model
+        except Exception as e:  # noqa: BLE001
+            code = getattr(e, "response", {}).get("Error", {}).get("Code", "")
+            if use_extra and code == "ValidationException":
+                continue  # this model version may not accept `thinking`; retry once without it
+            raise
+    raise RuntimeError("unreachable")
 
 
 def _json_from(text: str) -> dict:

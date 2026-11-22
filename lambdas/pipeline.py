@@ -131,7 +131,25 @@ def load(state: dict) -> dict:
     return {**state, "status": "DONE", "loaded": {"updated": updated, "skipped_missing": skipped, "errors": errors, "late_api_deletes": late}}
 
 
-ACTIONS = {f.__name__: f for f in (build, start_imports, check_imports, ensure_solution, start_train, check_train, start_batch, check_batch, load)}
+def prune_versions(state: dict) -> dict:
+    """Delete superseded solution versions so withdrawn members do not live on in old trained models.
+    Runs after `load`, so recommendations are already copied into the karte."""
+    p, keep = personalize(), state["solution_version_arn"]
+    deleted, failed = [], []
+    for v in p.list_solution_versions(solutionArn=state["solution_arn"])["solutionVersions"]:
+        arn = v["solutionVersionArn"]
+        if arn == keep:
+            continue
+        try:
+            p.delete_solution_version(solutionVersionArn=arn)
+            deleted.append(arn)
+        except Exception as e:  # noqa: BLE001 - e.g. still referenced by a running batch job
+            failed.append(f"{arn}: {str(e)[:80]}")
+    log.info(json.dumps({"action": "prune_versions", "deleted": len(deleted), "failed": failed}))
+    return {**state, "status": "DONE", "pruned": {"deleted": len(deleted), "failed": failed}}
+
+
+ACTIONS = {f.__name__: f for f in (build, start_imports, check_imports, ensure_solution, start_train, check_train, start_batch, check_batch, load, prune_versions)}
 
 
 def handler(event, _ctx):

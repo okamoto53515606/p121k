@@ -2,9 +2,11 @@ import * as path from 'path';
 import { Construct } from 'constructs';
 import {
   Duration, Size, RemovalPolicy, Stack, StackProps, CfnOutput, Tags,
-  aws_apigateway as apigw, aws_dynamodb as ddb, aws_events as events, aws_events_targets as targets,
+  aws_apigateway as apigw, aws_cloudtrail as cloudtrail, aws_cloudwatch as cw, aws_cloudwatch_actions as cw_actions,
+  aws_dynamodb as ddb, aws_events as events, aws_events_targets as targets,
   aws_iam as iam, aws_kms as kms, aws_lambda as lambda, aws_logs as logs, aws_s3 as s3,
-  aws_personalize as personalize, aws_stepfunctions as sfn, aws_stepfunctions_tasks as tasks,
+  aws_personalize as personalize, aws_sns as sns, aws_sns_subscriptions as subs,
+  aws_stepfunctions as sfn, aws_stepfunctions_tasks as tasks,
 } from 'aws-cdk-lib';
 
 export class KarteStack extends Stack {
@@ -12,10 +14,11 @@ export class KarteStack extends Stack {
     super(scope, id, props);
     const ctx = (k: string, d: string) => String(this.node.tryGetContext(k) ?? d);
     const modelId = ctx('modelId', 'jp.anthropic.claude-haiku-5-5');
-    const fallbackModelId = ctx('fallbackModelId', 'jp.anthropic.claude-haiku-4-5-20251001-v1:0');
     const policyReference = ctx('policyReference', 'now'); // 'last_event' only for replaying historical open data
     const retentionYears = Number(ctx('retentionYears', '3')); // source history kept N years (S3 lifecycle + FULL cutoff)
     const weeklyFull = ctx('weeklyFull', 'false') === 'true';
+    const alertEmail = ctx('alertEmail', ''); // optional: where pipeline/API failures are mailed
+    const auditTrail = ctx('auditTrail', 'false') === 'true'; // CloudTrail data events (billable)
     const allowedCidrs = ctx('allowedCidrs', '').split(',').map((s) => s.trim()).filter(Boolean);
 
     const key = new kms.Key(this, 'DataKey', {
@@ -40,6 +43,8 @@ export class KarteStack extends Stack {
       sortKey: sk ? { name: sk, type: ddb.AttributeType.STRING } : undefined,
       billing: ddb.Billing.onDemand(),
       encryption: ddb.TableEncryptionV2.customerManagedKey(key),
+      // No PITR: a deleted (withdrawn) member must not survive in 35-day backups.
+      pointInTimeRecoverySpecification: { pointInTimeRecoveryEnabled: false },
       removalPolicy: RemovalPolicy.DESTROY,
       deletionProtection: false,
     });
@@ -47,7 +52,7 @@ export class KarteStack extends Stack {
 
     const env = {
       TABLE_KARTE: karte.tableName,
-      BUCKET: bucket.bucketName, MODEL_ID: modelId, FALLBACK_MODEL_ID: fallbackModelId,
+      BUCKET: bucket.bucketName, MODEL_ID: modelId,
       POLICY_REFERENCE: policyReference, RETENTION_YEARS: String(retentionYears),
     };
     const code = lambda.Code.fromAsset(path.join(__dirname, '..', '..', 'lambdas'), { exclude: ['__pycache__', '*.pyc'] });
@@ -62,14 +67,19 @@ export class KarteStack extends Stack {
       return f;
     };
 
+    const fmId = modelId.replace(/^(jp|global)\./, '');
     const bedrockPolicy = new iam.PolicyStatement({
       actions: ['bedrock:InvokeModel'],
       resources: [
-        `arn:aws:bedrock:ap-northeast-1:${this.account}:inference-profile/jp.anthropic.*`,
-        'arn:aws:bedrock:ap-northeast-1::foundation-model/anthropic.*',
-        'arn:aws:bedrock:ap-northeast-3::foundation-model/anthropic.*',
+        `arn:aws:bedrock:${this.region}:${this.account}:inference-profile/${modelId}`,
+        `arn:aws:bedrock:${this.region}::foundation-model/${fmId}`,
+        `arn:aws:bedrock:ap-northeast-3::foundation-model/${fmId}`,
       ],
     });
+
+    // Alerts carry no member data: only resource names and counts.
+    const alerts = new sns.Topic(this, 'Alerts', { topicName: 'karte-alerts' });
+    if (alertEmail) alerts.addSubscription(new subs.EmailSubscription(alertEmail));
 
     const apiFn = fn('ApiFn', 'api.handler', { timeout: Duration.seconds(60) });
     karte.grantReadWriteData(apiFn);
@@ -115,7 +125,8 @@ export class KarteStack extends Stack {
     karte.grantReadWriteData(pipelineFn);
     pipelineFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['personalize:CreateDatasetImportJob', 'personalize:DescribeDatasetImportJob', 'personalize:CreateSolutionVersion', 'personalize:DescribeSolutionVersion',
-        'personalize:CreateBatchInferenceJob', 'personalize:CreateSolution', 'personalize:ListSolutions', 'personalize:DescribeBatchInferenceJob', 'personalize:DescribeDataset', 'personalize:DescribeSolution'],
+        'personalize:CreateBatchInferenceJob', 'personalize:CreateSolution', 'personalize:ListSolutions', 'personalize:DescribeBatchInferenceJob', 'personalize:DescribeDataset', 'personalize:DescribeSolution',
+        'personalize:ListSolutionVersions', 'personalize:DeleteSolutionVersion'],
       resources: ['*'],
     }));
     pRole.grantPassRole(pipelineFn.grantPrincipal);
@@ -142,11 +153,13 @@ export class KarteStack extends Stack {
     const ensureSol = step('ensure_solution');
     const startBatch = step('start_batch');
     const loadS = step('load');
+    const pruneS = step('prune_versions');
     exportS.next(startImports);
     poll('imports', startImports, 'check_imports', Duration.minutes(1), ensureSol);
     ensureSol.next(startTrain);
     poll('train', startTrain, 'check_train', Duration.minutes(5), startBatch);
     poll('batch', startBatch, 'check_batch', Duration.minutes(2), loadS);
+    loadS.next(pruneS);
     const pipeline = new sfn.StateMachine(this, 'RecoPipeline', {
       stateMachineName: 'karte-reco-pipeline', definitionBody: sfn.DefinitionBody.fromChainable(exportS),
       timeout: Duration.hours(12),
@@ -158,6 +171,22 @@ export class KarteStack extends Stack {
       targets: [new targets.SfnStateMachine(pipeline)],
     });
 
+    // Failure notifications: a silent pipeline failure means recommendations quietly go stale.
+    new events.Rule(this, 'PipelineFailedAlert', {
+      eventPattern: {
+        source: ['aws.states'], detailType: ['Step Functions Execution Status Change'],
+        detail: { status: ['FAILED', 'TIMED_OUT', 'ABORTED'], stateMachineArn: [pipeline.stateMachineArn] },
+      },
+      targets: [new targets.SnsTopic(alerts)],
+    });
+    const alarm = (id: string, metric: cw.IMetric, desc: string) => {
+      const a = new cw.Alarm(this, id, { metric, threshold: 1, evaluationPeriods: 1, comparisonOperator: cw.ComparisonOperator.GREATER_THAN_OR_EQUAL_TO_THRESHOLD, alarmDescription: desc });
+      a.addAlarmAction(new cw_actions.SnsAction(alerts));
+      return a;
+    };
+    alarm('PipelineErrors', pipelineFn.metricErrors({ period: Duration.minutes(5) }), 'FULL pipeline step failed (rejects/schema/data problem)');
+    alarm('ApiErrors', apiFn.metricErrors({ period: Duration.minutes(5) }), 'Karte API returned a server error');
+
     const policyStatements = [
       new iam.PolicyStatement({ effect: iam.Effect.ALLOW, principals: [new iam.AccountRootPrincipal()], actions: ['execute-api:Invoke'], resources: ['execute-api:/*'] }),
     ];
@@ -167,11 +196,34 @@ export class KarteStack extends Stack {
         conditions: { NotIpAddress: { 'aws:SourceIp': allowedCidrs } },
       }));
     }
+    if (auditTrail) {
+      const trailBucket = new s3.Bucket(this, 'AuditTrailBucket', {
+        encryption: s3.BucketEncryption.KMS, encryptionKey: key, bucketKeyEnabled: true,
+        blockPublicAccess: s3.BlockPublicAccess.BLOCK_ALL, enforceSSL: true,
+        removalPolicy: RemovalPolicy.DESTROY, autoDeleteObjects: true,
+        lifecycleRules: [{ id: 'trail-90d', expiration: Duration.days(90) }],
+      });
+      const trail = new cloudtrail.Trail(this, 'AuditTrail', { bucket: trailBucket, isMultiRegionTrail: false, sendToCloudWatchLogs: false });
+      // Who read/uploaded source history: object-level data events on the inbound prefixes only.
+      trail.addS3EventSelector([{ bucket, objectPrefix: 'inbound/' }], { readWriteType: cloudtrail.ReadWriteType.ALL });
+    }
+
+    const accessLogs = new logs.LogGroup(this, 'ApiAccessLogs', {
+      retention: logs.RetentionDays.THREE_MONTHS, removalPolicy: RemovalPolicy.DESTROY,
+    });
     const api = new apigw.RestApi(this, 'KarteApi', {
-      restApiName: 'karte-api', endpointTypes: [apigw.EndpointType.REGIONAL], cloudWatchRole: false,
+      restApiName: 'karte-api', endpointTypes: [apigw.EndpointType.REGIONAL],
       policy: new iam.PolicyDocument({ statements: policyStatements }),
       defaultMethodOptions: { authorizationType: apigw.AuthorizationType.IAM },
-      deployOptions: { stageName: 'v1', throttlingRateLimit: 50, throttlingBurstLimit: 100 },
+      deployOptions: {
+        stageName: 'v1', throttlingRateLimit: 50, throttlingBurstLimit: 100,
+        accessLogDestination: new apigw.LogGroupLogDestination(accessLogs),
+        // resourcePath (the template) is logged instead of path, so member IDs never enter the logs.
+        accessLogFormat: apigw.AccessLogFormat.custom(JSON.stringify({
+          requestId: '$context.requestId', resourcePath: '$context.resourcePath', status: '$context.status',
+          ip: '$context.identity.sourceIp', userAgent: '$context.identity.userAgent', integrationError: '$context.integrationErrorMessage',
+        })),
+      },
     });
     const integ = new apigw.LambdaIntegration(apiFn);
     const member = api.root.addResource('karte').addResource('{memberId}');
@@ -194,8 +246,12 @@ export class KarteStack extends Stack {
     });
 
     new CfnOutput(this, 'PipelineFunctionName', { value: pipelineFn.functionName });
+    new CfnOutput(this, 'AlertsTopicArn', { value: alerts.topicArn });
     new CfnOutput(this, 'PipelineArn', { value: pipeline.stateMachineArn });
     new CfnOutput(this, 'ApiUrl', { value: api.url });
+    new CfnOutput(this, 'ApiFunctionName', { value: apiFn.functionName });
+    new CfnOutput(this, 'ApiLogGroupName', { value: apiFn.logGroup.logGroupName });
+    new CfnOutput(this, 'ApiAccessLogGroupName', { value: accessLogs.logGroupName });
     new CfnOutput(this, 'BucketName', { value: bucket.bucketName });
     new CfnOutput(this, 'KarteTable', { value: karte.tableName });
     new CfnOutput(this, 'ApiInvokePolicyArn', { value: invokePolicy.managedPolicyArn });

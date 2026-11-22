@@ -62,3 +62,41 @@ test('allowedCidrs adds an explicit deny', () => {
     Policy: { Statement: Match.arrayWith([Match.objectLike({ Effect: 'Deny', Condition: { NotIpAddress: { 'aws:SourceIp': ['203.0.113.0/24'] } } })]) },
   });
 });
+
+test('PITR is off so a withdrawn member cannot survive in backups', () => {
+  const t = template();
+  for (const x of Object.values(t.findResources('AWS::DynamoDB::GlobalTable'))) {
+    expect(JSON.stringify(x)).toContain('"PointInTimeRecoverySpecification":{"PointInTimeRecoveryEnabled":false}');
+  }
+});
+
+test('failures are announced (SNS topic + pipeline and API error alarms)', () => {
+  const t = template();
+  t.resourceCountIs('AWS::SNS::Topic', 1);
+  t.resourceCountIs('AWS::CloudWatch::Alarm', 2);
+  const rules = t.findResources('AWS::Events::Rule');
+  expect(JSON.stringify(rules)).toContain('Step Functions Execution Status Change');
+});
+
+test('API access logs record the resource template, not the request path', () => {
+  const t = template();
+  t.hasResourceProperties('AWS::ApiGateway::Stage', {
+    AccessLogSetting: Match.objectLike({
+      Format: Match.stringLikeRegexp('resourcePath') }),
+  });
+  expect(JSON.stringify(t.findResources('AWS::ApiGateway::Stage'))).not.toContain('$context.path');
+});
+
+test('by default no CloudTrail trail is created; auditTrail=true adds object-level data events', () => {
+  expect(Object.keys(template().findResources('AWS::CloudTrail::Trail')).length).toBe(0);
+  const on = template({ auditTrail: 'true' });
+  expect(Object.keys(on.findResources('AWS::CloudTrail::Trail')).length).toBe(1);
+  expect(JSON.stringify(on.findResources('AWS::CloudTrail::Trail'))).toContain('inbound/');
+});
+
+test('the task role may invoke only the configured model', () => {
+  const t = template();
+  const json = JSON.stringify(t.findResources('AWS::IAM::Policy'));
+  expect(json).toContain('inference-profile/jp.anthropic.claude-haiku-5-5');
+  expect(json).not.toContain('inference-profile/jp.anthropic.*');
+});

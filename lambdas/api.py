@@ -6,7 +6,6 @@ import json
 import logging
 import secrets
 import time
-
 import common as c
 import llm
 import policy
@@ -46,7 +45,7 @@ def handler(event, _ctx):
     mid = (event.get("pathParameters") or {}).get("memberId", "")
     if not c.MEMBER_ID_RE.match(mid):
         return _resp(400, {"error": "INVALID_MEMBER_ID"})
-    log.info(json.dumps({"op": f"{method} {path}", "member": mid, "caller": event["requestContext"].get("identity", {}).get("userArn")}))
+    log.info(json.dumps({"op": f"{method} {path}", "member_tag": c.member_log_tag(mid), "caller": event["requestContext"].get("identity", {}).get("userArn")}))
 
     if method == "DELETE":
         return _resp(200, _delete(mid))
@@ -75,7 +74,7 @@ def handler(event, _ctx):
             "tone": body.get("tone", "丁寧で親しみやすい"),
             "interest_categories": [x[0] for x in sorted(k.get("categories", {}).items(), key=lambda kv: -int(kv[1]))[:3]],
             "purchase_count": int(k["counts"].get("purchase", 0)),
-            "recommended_items": [{"name": i["item_name"], "category": i["category"], "price_jpy": i["price"]} for i in reco[:3]],
+            "recommended_items": [{"name": i["item_name"], "category": i["category"], "price_jpy": int(i["price"])} for i in reco[:3]],
         }
         copy = llm.generate_copy(ctx)
         copy["generated_at"] = int(time.time())

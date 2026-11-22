@@ -24,7 +24,6 @@ def aws(monkeypatch):
     monkeypatch.setenv("POLICY_REFERENCE", "last_event")
     monkeypatch.setenv("RETENTION_YEARS", "3")
     monkeypatch.delenv("MODEL_ID", raising=False)
-    monkeypatch.delenv("FALLBACK_MODEL_ID", raising=False)
     with mock_aws():
         import common
         common._ddb = None
