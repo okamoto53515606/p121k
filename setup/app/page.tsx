@@ -9,7 +9,6 @@ type Settings = {
   allowedCidrs: string;
   auditTrail: boolean;
   modelId: string;
-  policyReference: "now" | "last_event";
 };
 type Deploy = { startedAt: string; finishedAt?: string; exitCode?: number; action: "deploy" | "destroy" };
 type Stack = { status: string; outputs: Record<string, string>; updatedAt?: string } | null;
@@ -22,7 +21,7 @@ type StateResp = {
 const EMPTY: StateResp = {
   connected: false,
   settings: { retentionYears: 3, weeklyFull: false, alertEmail: "", allowedCidrs: "", auditTrail: false,
-    modelId: "jp.anthropic.claude-haiku-5-5", policyReference: "now" },
+    modelId: "jp.anthropic.claude-haiku-5-5" },
   stack: null, execution: null, log: "",
 };
 
@@ -49,7 +48,7 @@ export default function Page() {
     return () => clearInterval(t);
   }, [refresh]);
 
-  useEffect(() => { setSettings(st.settings); }, [st.settings.retentionYears, st.settings.weeklyFull, st.settings.alertEmail, st.settings.allowedCidrs, st.settings.auditTrail, st.settings.modelId, st.settings.policyReference]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setSettings(st.settings); }, [st.settings.retentionYears, st.settings.weeklyFull, st.settings.alertEmail, st.settings.allowedCidrs, st.settings.auditTrail, st.settings.modelId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const post = async (url: string, body?: unknown, method = "POST") => {
     setBusy(url); setMsg(null);
@@ -85,9 +84,10 @@ export default function Page() {
         <a href="#connect"><span className={`dot ${stepDone.connect ? "done" : ""}`} />0. AWS 接続</a>
         <a href="#settings"><span className={`dot ${stepDone.settings ? "done" : ""}`} />1. 設定</a>
         <a href="#deploy"><span className={`dot ${stepDone.deploy ? "done" : deployRunning ? "warn" : ""}`} />2. デプロイ</a>
-        <a href="#ops"><span className={`dot ${stepDone.ops ? "done" : ""}`} />3. 運転（FULL）</a>
-        <a href="#guide"><span className={`dot ${deployed ? "done" : ""}`} />4. 社内システム連携</a>
-        <a href="#destroy"><span className="dot" />5. 削除</a>
+        <a href="#put"><span className="dot" />3. データのPUT</a>
+        <a href="#ops"><span className={`dot ${stepDone.ops ? "done" : ""}`} />4. FULL の実行</a>
+        <a href="#guide"><span className={`dot ${deployed ? "done" : ""}`} />5. 社内システム連携</a>
+        <a href="#destroy"><span className="dot" />6. 削除</a>
       </nav>
 
       <main className="content">
@@ -176,11 +176,6 @@ export default function Page() {
             <input type="checkbox" checked={settings.auditTrail} onChange={(e) => setSettings({ ...settings, auditTrail: e.target.checked })} />
             <span>CloudTrail のデータイベントを有効にする（S3 への読み書きを記録。課金あり）</span>
           </label>
-          <label className="check">
-            <input type="checkbox" checked={settings.policyReference === "last_event"}
-              onChange={(e) => setSettings({ ...settings, policyReference: e.target.checked ? "last_event" : "now" })} />
-            <span>過去データを流す検証モード（接触NG判定の基準時刻を「最新イベント」にする。本番はオフ）</span>
-          </label>
         </section>
 
         <section className="card" id="deploy">
@@ -213,8 +208,32 @@ export default function Page() {
           <pre>{st.log || "（まだログはありません）"}</pre>
         </section>
 
+        <section className="card" id="put">
+          <h2>3. データのPUT</h2>
+          <p className="lead">
+            FULL を回す前に、自社システムから次の3種類を S3 に置きます。<strong>個人情報はここで捨てます</strong>（氏名・住所・電話・メール、
+            問い合わせ本文は送らない）。会員IDは HMAC で仮名化したものを使います。
+          </p>
+          <table className="kv">
+            <tbody>
+              <tr><th>アイテムマスタ</th><td><code>s3://{bucket}/inbound/items/&lt;任意名&gt;.csv</code><br />
+                <span className="muted small">最新ファイルが全件スナップショット。列: <code>item_id, item_name, item_description, category, price</code></span></td></tr>
+              <tr><th>行動履歴</th><td><code>s3://{bucket}/inbound/events/&lt;任意名&gt;.csv</code><br />
+                <span className="muted small">追記する。列: <code>member_id, item_id, event_type, event_ts, reason</code>（<code>event_type</code> は view / like / cart / purchase / return / withdraw）</span></td></tr>
+              <tr><th>問い合わせ</th><td><code>s3://{bucket}/inbound/inquiries/&lt;任意名&gt;.csv</code><br />
+                <span className="muted small">分類コードのみ。列: <code>inquiry_id, member_id, received_ts, category, note</code>（<code>note</code> は <code>other</code> のときだけ40字以内）</span></td></tr>
+              <tr><th>必要な IAM</th><td><code>{outputs.UploadPolicyArn ?? "karte-inbound-upload"}</code></td></tr>
+            </tbody>
+          </table>
+          <ul className="tight">
+            <li><strong>退会</strong>は <code>withdraw</code> 行を追記するだけ。その行は消さない（毎回の FULL でこの会員を丸ごと除外する根拠になる）。</li>
+            <li>書式は UTF-8・ヘッダ付き。列の過不足はファイルごと拒否され、<code>reports/&lt;run&gt;/rejects.csv</code> に残る。</li>
+            <li>サンプルは <code>docs/samples/</code>、変換の参考実装は <code>tools/ingest_side.py</code>。</li>
+          </ul>
+        </section>
+
         <section className="card" id="ops">
-          <h2>3. 運転（FULL の手動実行）</h2>
+          <h2>4. FULL の実行</h2>
           <p className="lead">
             FULL は「S3 の全履歴を読み直してカルテと学習データを作り直す」処理です。退会者はこのタイミングで完全に消えます。
           </p>
@@ -244,19 +263,8 @@ export default function Page() {
         </section>
 
         <section className="card" id="guide">
-          <h2>4. 社内システム連携（PUT と API）</h2>
-          <p className="lead">この画面の値をそのまま社内システムの設定に使えます。</p>
-
-          <h3 style={{ fontSize: 13, marginBottom: 4 }}>S3 への PUT</h3>
-          <table className="kv">
-            <tbody>
-              <tr><th>アイテムマスタ</th><td><code>s3://{bucket}/inbound/items/&lt;任意名&gt;.csv</code>（最新ファイルが全件スナップショット）</td></tr>
-              <tr><th>行動履歴</th><td><code>s3://{bucket}/inbound/events/&lt;任意名&gt;.csv</code>（追記。withdraw 行も残す）</td></tr>
-              <tr><th>問い合わせ</th><td><code>s3://{bucket}/inbound/inquiries/&lt;任意名&gt;.csv</code>（分類コードのみ）</td></tr>
-              <tr><th>必要な IAM</th><td><code>{outputs.UploadPolicyArn ?? "karte-inbound-upload"}</code></td></tr>
-            </tbody>
-          </table>
-          <p className="muted small">列の定義とサンプルはリポジトリの <code>README.md</code> と <code>docs/samples/</code> を参照。</p>
+          <h2>5. 社内システム連携（API）</h2>
+          <p className="lead">取得系の API です。呼び出し元のロールに <code>karte-api-invoke</code> を付けて、SigV4 で署名します。</p>
 
           <h3 style={{ fontSize: 13, marginBottom: 4 }}>API（SigV4 署名が必須）</h3>
           <table className="kv">
@@ -292,7 +300,7 @@ curl -X DELETE … "${apiBase}/karte/<memberId>"`}</pre>
         </section>
 
         <section className="card" id="destroy">
-          <h2>5. 削除</h2>
+          <h2>6. 削除</h2>
           <p className="lead">スタックを削除します（S3 のデータ、DynamoDB のカルテ、KMS キーも消えます）。Personalize の Solution は残るため、必要なら手動で削除してください。</p>
           <div className="actions">
             <button className="danger" disabled={!st.connected || busy !== null || deployRunning}

@@ -12,7 +12,6 @@ export interface Settings {
   allowedCidrs: string;
   auditTrail: boolean;
   modelId: string;
-  policyReference: "now" | "last_event";
 }
 
 export interface DeployState {
@@ -38,7 +37,6 @@ export const DEFAULT_SETTINGS: Settings = {
   allowedCidrs: "",
   auditTrail: false,
   modelId: "jp.anthropic.claude-haiku-5-5",
-  policyReference: "now",
 };
 
 const STATE_PATH = resolve(process.cwd(), "setup-state.json");
@@ -80,7 +78,6 @@ export function validateSettings(input: unknown): { ok: true; settings: Settings
   if (allowedCidrs && !/^[0-9a-fA-F.:/,\s]+$/.test(allowedCidrs)) return { ok: false, error: "IP制限は CIDR をカンマ区切りで指定してください" };
   const modelId = String(b.modelId ?? DEFAULT_SETTINGS.modelId).trim();
   if (!/^[a-z0-9.-]+$/.test(modelId)) return { ok: false, error: "モデルIDの形式が不正です" };
-  const policyReference = b.policyReference === "last_event" ? "last_event" : "now";
   return {
     ok: true,
     settings: {
@@ -90,7 +87,6 @@ export function validateSettings(input: unknown): { ok: true; settings: Settings
       allowedCidrs,
       auditTrail: Boolean(b.auditTrail),
       modelId,
-      policyReference,
     },
   };
 }

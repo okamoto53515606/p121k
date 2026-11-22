@@ -5,7 +5,7 @@
 ## 開発
 
 - [x] **Claude Haiku 5.5 の Marketplace 契約**: 2026-11-22 10:47 UTC（19:47 JST）に承諾済み。契約ID `agmt-b398skur7br2wqwqzvp1aovgm` / オファー `offer-u3aih6zr7uw5u` / 製品 `prod-6cyn7tgqazjhu`（Anthropic, PBC「Claude Haiku 5.5 (Amazon Bedrock Edition)」）。`GetFoundationModelAvailability` は `agreementAvailability=AVAILABLE`
-- [ ] **アカウント検証の完了待ち**: 契約直後は推論が `AccessDeniedException`（ap-northeast-3 では「Verification normally takes less than 2 hours」と明示）。`tools/probe_haiku55.py` で `jp.anthropic.claude-haiku-5-5` の利用可否を監視し、応答したら Playground と `POST /karte/{id}/copy` の `model` が 5.5 になることを確認（現状: 契約から 70 分経過しても未解消）
+- [ ] **モデルアクセスの付与待ち（AWS 側）**: 契約から2時間経過しても推論は `AccessDeniedException`。原因は Service Quotas の `Cross-region model inference tokens per minute for Anthropic Claude Haiku 5.5` が **0**（既定は1,000万なので quota 引き上げではなく、アクセス自体が未付与）。`tools/probe_haiku55.py` で監視し、付与されたら Playground と `POST /karte/{id}/copy` の `model` が 5.5 になることを確認。AWS サポート窓口への起票が必要（下の「連絡用メモ」）
 - [x] Haiku 5.5 のバッチ推論の可否を確認 → **非対応**（実機で拒否を確認。文案生成は即時APIのみ）
 - [x] **代替モデルへの自動フォールバックを削除**（黙って別モデルに切り替わらないようにする。使えなければエラー）
 - [x] **退会データが残りうる場所の棚卸しと対処**（原則7に関わる）
@@ -22,7 +22,7 @@
 - [x] 拒否行・`skipped_files` の**急増**を検知するアラーム（build が CloudWatch 名前空間 `P121K` に `RejectedRows` / `SkippedFiles` / `Members` / `BatchUsers` を発行し、しきい値超過で SNS 通知。実機で `RejectedRows=2` の受信を確認）
 - [x] build 失敗時に中途半端な状態にならないことの確認（「読み切ってから書く」順序。docs/operations.md に明記）
 - [x] 自社側ツールの参考実装: `tools/ingest_side.py`（HMAC仮名化・問い合わせの分類コード化・`withdraw` 出力）
-- [ ] 自社サーバ用 IAM（Roles Anywhere / OIDC など）の構成例
+- [ ] **自社サーバ用 IAM の方式決定**（何を決めるか: 呼び出し元の実行環境 / 長期キーを置けるか / 付与するポリシー / ローテーション）。選択肢と推奨は `docs/iam-for-callers.md`。決めたらロールとポリシーの実装例を追加
 - [x] 監査: CloudTrail データイベント（`-c auditTrail=true`）と API Gateway アクセスログ
 - [ ] AWS Config ルール（暗号化・公開禁止・保持期間の継続監視）
 - [x] スケール: build を Glue / Fargate に置き換える閾値と設計（docs/operations.md §6。目安は build 10分超）
@@ -39,7 +39,7 @@
 - [ ] `allowedCidrs`（IP制限）と `weeklyFull=true`（週次起動）の実機確認
 - [ ] Bedrock 呼び出しが `jp.*` 経由（東京・大阪のみ）であることを CloudTrail で確認（モデル有効化後）
 - [x] 日本語の伏字化のテスト拡充（`tests/test_pii.py`: 誤検知しないこと・名前は文脈のみ）
-- [ ] 伏字化の精度評価（実データでの再現率・適合率）
+- [x] 伏字化の位置づけを整理: **個人情報は PUT しない**（原則4）ため主防御ではない。万一の混入に備えた保険としてのみ維持し、精度評価は対象外とする
 - [ ] 10万会員規模の負荷試験（build の所要時間とメモリ、Lambda 15分上限の余裕）
 
 ## ドキュメント
@@ -50,3 +50,21 @@
 - [x] 運用手順書: `docs/operations.md`（PUT、FULL、拒否レポート、障害対応、監査、後片付け、規模）
 - [x] データ仕様のサンプルCSV: `docs/samples/`
 - [x] 「データ主権が東京のみ必須の場合」の代替案: `docs/data-residency-options.md`
+
+## 連絡用メモ（AWS サポートへ）
+
+```
+アカウント: 210387976006
+リージョン: ap-northeast-1（ap-northeast-3 でも同じ）
+モデル: anthropic.claude-haiku-5-5（推論プロファイル jp.anthropic.claude-haiku-5-5）
+事象: Marketplace オファー offer-u3aih6zr7uw5u を 2026-11-22T10:47Z に承諾し、
+      契約 agmt-b398skur7br2wqwqzvp1aovgm が作成済み。
+      GetFoundationModelAvailability は agreementAvailability=AVAILABLE,
+      entitlementAvailability=AVAILABLE, authorizationStatus=AUTHORIZED。
+      しかし Converse / InvokeModel は
+      "anthropic.claude-haiku-5-5 is not available for this account."
+2時間以上経過しても解消しない。
+Service Quotas では Haiku 5.5 の TPM が 0（既定は 10,000,000）、
+Haiku 4.5 は 5,000,000 で正常に利用できる。
+モデルアクセスの付与をお願いしたい。
+```
