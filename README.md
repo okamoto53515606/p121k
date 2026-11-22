@@ -112,10 +112,12 @@ npx cdk deploy KarteStack --outputs-file ../data/outputs.json
 | Amazon Reviews 2023 | **不採用**。ライセンス記載が確認できない |
 | 商品名・説明・like・return・withdraw・問い合わせコード | **合成**（`tools/prepare_data.py`、ルールベース） |
 
-## モデルとコストの要点（要再確認）
+## モデルとコストの要点
 
-- Claude Haiku 5.5 の東京単独推論は無く、日本向け推論プロファイル `jp.anthropic.claude-haiku-5-5`（東京・大阪）のみ。Bedrock のバッチ推論対応表には未掲載。
-- 単価は第三者の価格サイトの値（JPプロファイル: 入力 $0.11 / 出力 $0.55 /100万トークン）。AWS公式価格での確認は未了。
+- Claude Haiku 5.5 の東京単独推論は無く、日本向け推論プロファイル `jp.anthropic.claude-haiku-5-5`（東京・大阪）のみ。
+- 単価（Bedrock の Marketplace オファーの料金表で確認済み）: 日本向けプロファイルは入力 $0.11 / 出力 $0.55 /100万トークン（グローバルは $0.10 / $0.50）。100Kトークン超は入力 $0.55 / 出力 $2.75。
+- **Haiku 5.5 は Bedrock のバッチ推論に対応していない**（`CreateModelInvocationJob` が `Batch inference is not supported for the requested model` で拒否することを実機で確認）。バッチ対応の Haiku 4.5 は未使用。文案生成は即時API（`POST /copy`）のみ。
+- 利用には Marketplace の契約（従量課金・返金なし）への同意が必要。未同意のアカウントでは Haiku 4.5 に自動フォールバックする。
 - Personalize v2: 取込 $0.05/GB、学習 $2.00/100万インタラクション、推論 $0.15/1,000リクエスト。FULL再学習は毎回全件が学習課金の対象。
 
 ## 注意
