@@ -11,6 +11,8 @@ type Settings = {
   modelId: string;
   geoBlock: boolean;
   uploadCidrs: string;
+  callerPrincipalArns: string;
+  accessKeys: boolean;
   accessKeyMaxAgeDays: number;
 };
 type Deploy = { startedAt: string; finishedAt?: string; exitCode?: number; action: "deploy" | "destroy" };
@@ -24,7 +26,8 @@ type StateResp = {
 const EMPTY: StateResp = {
   connected: false,
   settings: { retentionYears: 3, weeklyFull: false, alertEmail: "", allowedCidrs: "", auditTrail: false,
-    modelId: "jp.anthropic.claude-haiku-5-5", geoBlock: true, uploadCidrs: "", accessKeyMaxAgeDays: 180 },
+    modelId: "jp.anthropic.claude-haiku-5-5", geoBlock: true, uploadCidrs: "", callerPrincipalArns: "",
+    accessKeys: false, accessKeyMaxAgeDays: 180 },
   stack: null, execution: null, log: "",
 };
 
@@ -182,9 +185,9 @@ export default function Page() {
               <input type="text" value={settings.uploadCidrs} placeholder="203.0.113.0/24"
                 onChange={(e) => setSettings({ ...settings, uploadCidrs: e.target.value })} />
             </label>
-            <label className="field"><span>アクセスキーの有効期間（日）</span>
-              <input type="number" min={1} max={365} value={settings.accessKeyMaxAgeDays}
-                onChange={(e) => setSettings({ ...settings, accessKeyMaxAgeDays: Number(e.target.value) })} />
+            <label className="field"><span>ロールを引き受けさせる相手（ARN・任意）</span>
+              <input type="text" value={settings.callerPrincipalArns} placeholder="arn:aws:iam::123456789012:role/my-batch"
+                onChange={(e) => setSettings({ ...settings, callerPrincipalArns: e.target.value })} />
             </label>
           </div>
           <label className="check">
@@ -195,6 +198,16 @@ export default function Page() {
             <input type="checkbox" checked={settings.geoBlock} onChange={(e) => setSettings({ ...settings, geoBlock: e.target.checked })} />
             <span>海外IPからの API 呼び出しを遮断する（WAF の国判定で日本以外をブロック。課金あり）</span>
           </label>
+          <label className="check">
+            <input type="checkbox" checked={settings.accessKeys} onChange={(e) => setSettings({ ...settings, accessKeys: e.target.checked })} />
+            <span>長期アクセスキー方式も用意する（<strong>非推奨</strong>。IAM ロールを使えない場合だけ。既定は無効）</span>
+          </label>
+          {settings.accessKeys && (
+            <label className="field"><span>アクセスキーの有効期間（日）</span>
+              <input type="number" min={1} max={365} value={settings.accessKeyMaxAgeDays}
+                onChange={(e) => setSettings({ ...settings, accessKeyMaxAgeDays: Number(e.target.value) })} />
+            </label>
+          )}
         </section>
 
         <section className="card" id="deploy">
@@ -319,10 +332,22 @@ curl -X DELETE … "${apiBase}/karte/<memberId>"`}</pre>
         </section>
 
         <section className="card" id="keys">
-          <h3 style={{ fontSize: 13, marginBottom: 4 }}>アクセスキー（S3用 / API用を分けて発行）</h3>
+          <h3 style={{ fontSize: 13, marginBottom: 4 }}>自社サーバが引き受けるロール</h3>
+          <p className="muted small">
+            呼び出しは<strong>IAM ロール</strong>で行います（長期キーなし）。EC2 のインスタンスプロファイル、ECS タスクロール、
+            EKS（IRSA）、OIDC、Roles Anywhere のいずれかで次のロールを引き受けてください。
+          </p>
+          <table className="kv">
+            <tbody>
+              <tr><th>S3 PUT 用</th><td><code>{outputs.UploadRoleArn ?? "（デプロイ後に表示）"}</code></td></tr>
+              <tr><th>API 用</th><td><code>{outputs.ApiRoleArn ?? "（デプロイ後に表示）"}</code></td></tr>
+            </tbody>
+          </table>
+          <p className="muted small">別アカウントのロールに許可する場合は、設定の「ロールを引き受けさせる相手」に ARN を追加して再デプロイします。</p>
+          {settings.accessKeys && (<>
+          <h3 style={{ fontSize: 13, margin: "12px 0 4px" }}>長期アクセスキー（非推奨）</h3>
           <p className="muted small">
             発行した秘密キーは<strong>この画面に一度だけ</strong>表示されます。期限を過ぎたキーは日次ジョブが自動で無効化・削除します。
-            可能なら長期キーは使わず、IAM ロール（EC2/ECS/EKS/OIDC/Roles Anywhere）を推奨します（`docs/iam-for-callers.md`）。
           </p>
           <div className="actions">
             <button disabled={!deployed || busy !== null} onClick={async () => { setKeys(await (await fetch("/api/keys")).json()); }}>現在のキーを表示</button>
@@ -344,6 +369,7 @@ curl -X DELETE … "${apiBase}/karte/<memberId>"`}</pre>
             </div>
           )}
           {keys && <pre>{JSON.stringify(keys, null, 2)}</pre>}
+          </>)}
         </section>
 
         <section className="card" id="destroy">

@@ -22,7 +22,7 @@
 - [x] 拒否行・`skipped_files` の**急増**を検知するアラーム（build が CloudWatch 名前空間 `P121K` に `RejectedRows` / `SkippedFiles` / `Members` / `BatchUsers` を発行し、しきい値超過で SNS 通知。実機で `RejectedRows=2` の受信を確認）
 - [x] build 失敗時に中途半端な状態にならないことの確認（「読み切ってから書く」順序。docs/operations.md に明記）
 - [x] 自社側ツールの参考実装: `tools/ingest_side.py`（HMAC仮名化・問い合わせの分類コード化・`withdraw` 出力）
-- [ ] **自社サーバ用 IAM の方式決定**（何を決めるか: 呼び出し元の実行環境 / 長期キーを置けるか / 付与するポリシー / ローテーション）。選択肢と推奨は `docs/iam-for-callers.md`。決めたらロールとポリシーの実装例を追加
+- [x] **自社サーバ用 IAM**: **IAM ロール方式を既定**にした（`p121k-upload` / `p121k-api` の2ロール、長期キーなし）。EC2/ECS/EKS/OIDC/Roles Anywhere/別アカウントの手順は `docs/iam-for-callers.md`。長期キーは `-c accessKeys=true` のオプトイン（非推奨）
 - [x] 監査: CloudTrail データイベント（`-c auditTrail=true`）と API Gateway アクセスログ
 - [ ] AWS Config ルール（暗号化・公開禁止・保持期間の継続監視）
 - [x] スケール: build を Glue / Fargate に置き換える閾値と設計（docs/operations.md §6。目安は build 10分超）

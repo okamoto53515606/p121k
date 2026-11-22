@@ -14,6 +14,8 @@ export interface Settings {
   modelId: string;
   geoBlock: boolean;
   uploadCidrs: string;
+  callerPrincipalArns: string;
+  accessKeys: boolean; // 非推奨: 長期アクセスキーで呼ぶ場合だけ有効化
   accessKeyMaxAgeDays: number;
 }
 
@@ -42,6 +44,8 @@ export const DEFAULT_SETTINGS: Settings = {
   modelId: "jp.anthropic.claude-haiku-5-5",
   geoBlock: true,
   uploadCidrs: "",
+  callerPrincipalArns: "",
+  accessKeys: false,
   accessKeyMaxAgeDays: 180,
 };
 
@@ -99,6 +103,8 @@ export function validateSettings(input: unknown): { ok: true; settings: Settings
       modelId,
       geoBlock: b.geoBlock !== false,
       uploadCidrs: String(b.uploadCidrs ?? "").trim(),
+      callerPrincipalArns: String(b.callerPrincipalArns ?? "").trim(),
+      accessKeys: Boolean(b.accessKeys),
       accessKeyMaxAgeDays: Number(b.accessKeyMaxAgeDays ?? DEFAULT_SETTINGS.accessKeyMaxAgeDays),
     },
   };

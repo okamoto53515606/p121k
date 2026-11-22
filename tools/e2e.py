@@ -227,6 +227,16 @@ def stage_verify():
     print("== least privilege: signed call without the invoke policy")
     ok &= least_privilege_check(sample_ok)
 
+    print("== callers use roles, not long-lived keys")
+    roles = {}
+    for name in ("p121k-upload", "p121k-api"):
+        pol = iam.list_attached_role_policies(RoleName=name)["AttachedPolicies"]
+        roles[name] = [p["PolicyName"] for p in pol]
+    users = iam.list_users()["Users"]
+    key_users = [u["UserName"] for u in users if u["UserName"].startswith("p121k")]
+    print("  role policies:", roles, "| key-based users:", key_users)
+    ok &= roles["p121k-upload"] == ["karte-inbound-upload"] and roles["p121k-api"] == ["karte-api-invoke"] and not key_users
+
     print("== log hygiene: member IDs must not appear in CloudWatch Logs")
     ok &= log_hygiene_check(sample_ok)
 

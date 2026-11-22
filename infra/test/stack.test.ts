@@ -120,15 +120,27 @@ test('search indexes exist for the list queries (constant partition key)', () =>
   }
 });
 
-test('one IAM user per purpose, each with only its own policy', () => {
+test('callers use assumable roles, one per purpose, with no long-lived keys by default', () => {
   const t = template();
-  const users = t.findResources('AWS::IAM::User');
-  expect(Object.keys(users).length).toBe(2);
-  const json = JSON.stringify(users);
-  expect(json).toContain('p121k-upload');
-  expect(json).toContain('p121k-api');
+  expect(Object.keys(t.findResources('AWS::IAM::User')).length).toBe(0); // principle 2: no access keys
+  const roles = Object.values(t.findResources('AWS::IAM::Role')) as any[];
+  const names = roles.map((r) => r.Properties.RoleName).filter(Boolean).sort();
+  expect(names).toEqual(expect.arrayContaining(['p121k-upload', 'p121k-api']));
   t.hasResourceProperties('AWS::IAM::ManagedPolicy', { ManagedPolicyName: 'karte-inbound-upload' });
   t.hasResourceProperties('AWS::IAM::ManagedPolicy', { ManagedPolicyName: 'karte-api-invoke' });
+  // no key-expiry job unless keys are explicitly enabled
+  expect(JSON.stringify(t.findResources('AWS::Events::Rule'))).not.toContain('Keyguard');
+});
+
+test('access keys are an explicit opt-in (legacy callers only)', () => {
+  const t = template({ accessKeys: 'true' });
+  expect(Object.keys(t.findResources('AWS::IAM::User')).length).toBe(2);
+  expect(JSON.stringify(t.findResources('AWS::Events::Rule'))).toContain('Keyguard');
+});
+
+test('extra caller principals can be granted sts:AssumeRole', () => {
+  const t = template({ callerPrincipalArns: 'arn:aws:iam::999999999999:role/ec2-batch' });
+  expect(JSON.stringify(t.findResources('AWS::IAM::Role'))).toContain('999999999999');
 });
 
 test('API blocks requests from outside Japan by default (WAF geo match)', () => {

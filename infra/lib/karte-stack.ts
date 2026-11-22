@@ -21,7 +21,10 @@ export class KarteStack extends Stack {
     const auditTrail = ctx('auditTrail', 'false') === 'true'; // CloudTrail data events (billable)
     const geoBlock = ctx('geoBlock', 'true') === 'true'; // API: block requests originating outside Japan
     const uploadCidrs = ctx('uploadCidrs', '').split(',').map((x) => x.trim()).filter(Boolean);
-    const accessKeyMaxAgeDays = ctx('accessKeyMaxAgeDays', '180'); // enforced by the keyguard job
+    const callerPrincipalArns = ctx('callerPrincipalArns', '').split(',').map((x) => x.trim()).filter(Boolean);
+    // 原則2: 呼び出しは IAM ロール。長期キーは明示的に opt-in したときだけ作る（非推奨）。
+    const accessKeys = ctx('accessKeys', 'false') === 'true';
+    const accessKeyMaxAgeDays = ctx('accessKeyMaxAgeDays', '180');
     const allowedCidrs = ctx('allowedCidrs', '').split(',').map((s) => s.trim()).filter(Boolean);
 
     const key = new kms.Key(this, 'DataKey', {
@@ -279,22 +282,41 @@ export class KarteStack extends Stack {
     });
 
     new CfnOutput(this, 'PipelineFunctionName', { value: pipelineFn.functionName });
-    // Two long-lived keys, two purposes: S3 PUT and API. Keys are created from the
-    // console and expire (max age enforced daily by keyguard).
-    const uploadUser = new iam.User(this, 'UploadUser', { userName: 'p121k-upload', managedPolicies: [uploadPolicy] });
-    const apiUser = new iam.User(this, 'ApiUser', { userName: 'p121k-api', managedPolicies: [invokePolicy] });
-    for (const u of [uploadUser, apiUser]) Tags.of(u).add('p121k-managed', 'true');
-    const keyguard = fn('Keyguard', 'keyguard.handler', {
-      timeout: Duration.minutes(5), environment: { ...env, KEY_USERS: `${uploadUser.userName},${apiUser.userName}`, ACCESS_KEY_MAX_AGE_DAYS: accessKeyMaxAgeDays },
-    });
-    keyguard.addToRolePolicy(new iam.PolicyStatement({
-      actions: ['iam:ListAccessKeys', 'iam:UpdateAccessKey', 'iam:DeleteAccessKey', 'iam:ListUsers'],
-      resources: [uploadUser.userArn, apiUser.userArn],
-    }));
-    new events.Rule(this, 'KeyguardDaily', {
-      schedule: events.Schedule.cron({ minute: '15', hour: '19' }), // 04:15 JST
-      targets: [new targets.LambdaFunction(keyguard)],
-    });
+    // 呼び出し側が引き受ける（assume する）ロール。用途ごとに分け、付けるポリシーは1つだけ。
+    // EC2 のインスタンスプロファイル / ECS タスクロール / EKS（IRSA）/ OIDC /
+    // Roles Anywhere のいずれでも、このロールを引き受けさせれば長期キーは不要。
+    const assumeRole = (id: string, roleName: string, policy: iam.IManagedPolicy, description: string) => {
+      const role = new iam.Role(this, id, { roleName, assumedBy: new iam.AccountRootPrincipal(), managedPolicies: [policy], description });
+      if (callerPrincipalArns.length) {
+        role.assumeRolePolicy!.addStatements(new iam.PolicyStatement({
+          actions: ['sts:AssumeRole'], principals: callerPrincipalArns.map((a) => new iam.ArnPrincipal(a)),
+        }));
+      }
+      return role;
+    };
+    const uploadRole = assumeRole('UploadRole', 'p121k-upload', uploadPolicy, 'S3 PUT of inbound TSV (company servers)');
+    const apiRole = assumeRole('ApiRole', 'p121k-api', invokePolicy, 'Karte API (company servers)');
+
+    // 非推奨: 長期アクセスキーで呼ぶ場合だけ、IAM ユーザーと失効ジョブを作る。
+    if (accessKeys) {
+      const uploadUser = new iam.User(this, 'UploadUser', { userName: 'p121k-upload-key', managedPolicies: [uploadPolicy] });
+      const apiUser = new iam.User(this, 'ApiUser', { userName: 'p121k-api-key', managedPolicies: [invokePolicy] });
+      for (const u of [uploadUser, apiUser]) Tags.of(u).add('p121k-managed', 'true');
+      const keyguard = fn('Keyguard', 'keyguard.handler', {
+        timeout: Duration.minutes(5),
+        environment: { ...env, KEY_USERS: `${uploadUser.userName},${apiUser.userName}`, ACCESS_KEY_MAX_AGE_DAYS: accessKeyMaxAgeDays },
+      });
+      keyguard.addToRolePolicy(new iam.PolicyStatement({
+        actions: ['iam:ListAccessKeys', 'iam:UpdateAccessKey', 'iam:DeleteAccessKey', 'iam:ListUsers'],
+        resources: [uploadUser.userArn, apiUser.userArn],
+      }));
+      new events.Rule(this, 'KeyguardDaily', {
+        schedule: events.Schedule.cron({ minute: '15', hour: '19' }),
+        targets: [new targets.LambdaFunction(keyguard)],
+      });
+      new CfnOutput(this, 'UploadUserName', { value: uploadUser.userName });
+      new CfnOutput(this, 'ApiUserName', { value: apiUser.userName });
+    }
 
     // 海外IPからのAPI呼び出しを遮断（国単位）。WAF は API Gateway のステージに紐づける。
     if (geoBlock) {
@@ -328,9 +350,8 @@ export class KarteStack extends Stack {
     }
 
     new CfnOutput(this, 'AlertsTopicArn', { value: alerts.topicArn });
-    new CfnOutput(this, 'UploadUserName', { value: uploadUser.userName });
-    new CfnOutput(this, 'ApiUserName', { value: apiUser.userName });
-    new CfnOutput(this, 'AccessKeyMaxAgeDays', { value: accessKeyMaxAgeDays });
+    new CfnOutput(this, 'UploadRoleArn', { value: uploadRole.roleArn });
+    new CfnOutput(this, 'ApiRoleArn', { value: apiRole.roleArn });
     new CfnOutput(this, 'PipelineArn', { value: pipeline.stateMachineArn });
     new CfnOutput(this, 'ApiUrl', { value: api.url });
     new CfnOutput(this, 'ApiFunctionName', { value: apiFn.functionName });

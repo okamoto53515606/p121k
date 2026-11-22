@@ -39,7 +39,13 @@ def _resp(code: int, body: dict):
 
 def _view(k: dict) -> dict:
     out = {key: k.get(key) for key in (
-        "member_id", "updated_at", "last_event_ts", "counts", "last_ts", "recent_events", "inquiry_count", "inquiries", "reco", "copy")}
+        "member_id", "updated_at", "last_event_ts", "counts", "last_ts", "recent_events",
+        # full history from S3 (not truncated) + the derived search fields
+        "purchases", "returns", "inquiry_count", "inquiries",
+        "first_purchase_ts", "last_purchase_ts", "first_view_ts", "last_view_ts",
+        "purchase_count_30d", "purchase_count_90d", "purchase_count_180d",
+        "view_count_30d", "view_count_90d", "view_count_180d",
+        "reco", "copy")}
     out["top_categories"] = [x[0] for x in sorted(k.get("categories", {}).items(), key=lambda kv: -int(kv[1]))[:5]]
     out["contact"] = policy.evaluate(k)
     return out

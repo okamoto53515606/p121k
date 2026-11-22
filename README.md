@@ -1,9 +1,28 @@
 # P121K — Personalized One-to-One Karte
 
-自社AWS（東京）に顧客1人1人の「カルテ」を持ち、Amazon Personalize v2 でレコメンドを作り、Bedrock で汎用の案内文案（メール・手紙・LINEなど媒体を問わない）を作る基盤。
+自社AWS（日本リージョン）に顧客1人1人の「カルテ」を持ち、Amazon Personalize v2 でレコメンドを作り、Bedrock で汎用の案内文案（メール・手紙・LINEなど媒体を問わない）を作る基盤。
 メール配信機能・CMSは作らない。結果は自社サーバが IAM 署名付きAPIで取得する。
 
 残タスクは [TODO.md](./TODO.md)。
+
+## なぜ作ったか（開発のきっかけ）
+
+個人メディア [homepage-v2](https://github.com/okamoto53515606/homepage) を開発・運用している。
+その [blueprint](https://github.com/okamoto53515606/homepage/blob/main/docs/blueprint.md) に
+「レコメンドによる『再来訪』の促進」が掲げられているが、**全く手つかず**だった。
+
+homepage-v2 の立ち位置はこう整理されている。
+
+| 評価軸 | 既存の常識 | homepage |
+| :--- | :--- | :--- |
+| 収益モデル | 広告モデル vs サブスク（継続課金） | **都度課金（少額決済後にN日間見放題）** |
+| ユーザー維持 | 離脱防止施策による「囲い込み」 | **レコメンドによる「再来訪」の促進** |
+| 利益構造 | 利益率の最大化 | **手数料負けも実験の一部**（Stripe手数料構造との戦いもコンテンツ化） |
+
+そこで、特定のメディアに依存しない**汎用の分析・レコメンドの仕組み**を先に用意することにした。
+homepage-v2 の思想（売り手都合ではなく利用者のことを考える）に、
+**利用者一人一人に向き合う**というテーマを重ねて、
+**Persolized One To One Karte → p121k** と名付けた。
 
 ## 設計原則
 
@@ -36,27 +55,175 @@
 16. **データの国外流出を防ぐために、AWS の日本リージョン（東京・大阪）だけで完結させる。** 保存先は東京。Bedrock は `jp.*` 推論プロファイル（東京・大阪のみ）を使う。API は WAF の国判定で日本国外からの呼び出しを遮断する。
 17. **構築と検証のずれを防ぐために、全リソースを CDK でコード化し、セキュリティ性質を CDK テストで検証する。**
 
-## 構成
+## 全体構成
 
-```
-自社サーバ ──(S3 PUT, IAMロール)──> S3 inbound/{items|events|inquiries}/*.csv
-                                       │（週1 or 手動で起動）
-                                       ▼
-              Step Functions「karte-reco-pipeline」
-                build（S3全履歴 → DynamoDBカルテ + Personalize入力）
-                → Personalize User-Personalization-v2（取込 → 学習 → バッチ推論）
-                → load（Top-N をカルテへ）→ prune（旧 Solution Version を削除）
-                                       ▼
-自社サーバ ──(SigV4)──> API Gateway(AWS_IAM) → Lambda → DynamoDB / Bedrock
-   GET /karte/{id}  GET /karte/{id}/reco  POST /karte/{id}/copy  DELETE /karte/{id}
+```mermaid
+flowchart LR
+  subgraph corp["自社システム（AWS外・国内）"]
+    batch["バッチ<br/>TSV生成・HMAC仮名化<br/>問い合わせのコード化"]
+    app["アプリ / CRM<br/>実名はここだけ"]
+    ops["運用担当"]
+  end
+
+  subgraph aws["AWS 日本リージョン（保存は東京）"]
+    s3in[("S3 inbound/*.tsv")]
+    sfn["Step Functions<br/>build → import → train → batch → load → prune"]
+    karte[("DynamoDB カルテ<br/>+ 検索GSI")]
+    pers["Amazon Personalize<br/>User-Personalization-v2<br/>（バッチ推論のみ）"]
+    apigw["API Gateway<br/>IAM署名 + WAF（日本国外を遮断）"]
+    fn["Lambda<br/>カルテ・レコメンド・文案・検索"]
+    bedrock["Amazon Bedrock<br/>Claude Haiku 5.5（jp.*）"]
+  end
+
+  ops -- "デプロイ / FULL / 設定<br/>（127.0.0.1 の画面）" --> sfn
+  batch -- "IAMキー（S3用）" --> s3in
+  s3in --> sfn
+  sfn --> karte
+  sfn --> pers
+  pers --> sfn
+  app -- "IAM署名（API用）" --> apigw
+  apigw --> fn
+  fn --> karte
+  fn --> bedrock
+  bedrock --> fn
+  fn --> app
 ```
 
-- `infra/` CDK(TypeScript) 1スタック `KarteStack`（ap-northeast-1）
-- `setup/` セットアップ / 運用画面（Next.js、localhost 専用、Basic 認証、キーはメモリのみ）
-- `lambdas/` Python 3.12: `full.py`（FULL再構築）, `pipeline.py`（Step Functions各ステップ）, `api.py`, `llm.py`（文案）, `policy.py`（接触NGルール）, `pii.py`（伏字化）
-- `tools/prepare_data.py` オープンデータ+合成データ → 仕様CSV、`tools/e2e.py` AWS上のE2E、`tools/ingest_side.py` 自社側の参考実装、`tools/probe_haiku55.py` モデル利用可否の確認
-- `docs/` 運用手順（`operations.md`）、データ主権の代替案、CSVサンプル
-- `tests/` pytest(moto)、`infra/test/` jest(CDK assertions)、`.github/workflows/ci.yml` で両方を自動実行
+- **個人情報（氏名・住所・電話・メール・問い合わせ本文）は AWS に入らない。** 自社側で HMAC 仮名化・コード化したものだけを置く。
+- 保存先は東京。Bedrock だけは日本向け推論プロファイル（東京・大阪）を使う。
+- 自社システムは AWS の外（国内）にあり、S3 への PUT と API 呼び出しの2経路だけを持つ。
+
+## 利用イメージ（実データ）
+
+テストデータ（1.5万会員・約24万イベント）で実際に返ってきたレスポンス。
+
+### カルテを取る — `GET /karte/{memberId}`
+
+```json
+{
+  "member_id": "62b8bbb57707f3c2c13eb56a9865a8bf",
+  "updated_at": 1795382991,
+  "last_event_ts": 1569922559,
+  "counts": {
+    "purchase": 2,
+    "view": 8,
+    "like": 0,
+    "cart": 0,
+    "return": 0
+  },
+  "last_ts": {
+    "purchase": 1569910881,
+    "view": 1569922559
+  },
+  "recent_events": [
+    {
+      "type": "view",
+      "item_id": "4804056",
+      "ts": 1569911079
+    },
+    {
+      "type": "view",
+      "item_id": "4804056",
+      "ts": 1569913826
+    },
+    {
+      "type": "view",
+      "item_id": "4804056",
+      "ts": 1569922559
+    }
+  ],
+  "purchases": [
+    {
+      "item_id": "4804056",
+      "price": 24297,
+      "ts": 1569908004
+    },
+    {
+      "item_id": "4804056",
+      "price": 24297,
+      "ts": 1569910881
+    }
+  ],
+  "returns": [],
+  "inquiry_count": 1,
+  "inquiries": [
+    {
+      "note": "ポイント失効についての相談",
+      "id": "Q0000321",
+      "category": "other",
+      "ts": 1569857759
+    }
+  ],
+  "first_purchase_ts": 1569908004,
+  "last_purchase_ts": 1569910881,
+  "first_view_ts": 1569907828,
+  "last_view_ts": 1569922559,
+  "purchase_count_30d": 2,
+  "purchase_count_90d": 2,
+  "purchase_count_180d": 2,
+  "view_count_30d": 8,
+  "view_count_90d": 8,
+  "view_count_180d": 8,
+  "reco": {
+    "generated_at": 1795386332,
+    "items": [
+      {
+        "category": "electronics.audio.headphone",
+        "item_id": "4804056",
+        "item_name": "apple headphone #4804056",
+        "price": 24297,
+        "score": "0.7959431"
+      },
+      {
+        "category": "electronics.audio.headphone",
+        "item_id": "4804055",
+        "item_name": "apple headphone #4804055",
+        "price": 28310,
+        "score": "0.0748569"
+      },
+      {
+        "category": "electronics.audio.headphone",
+        "item_id": "4802036",
+        "item_name": "apple headphone #4802036",
+        "price": 25734,
+        "score": "0.0663173"
+      }
+    ],
+    "model": "arn:aws:personalize:ap-northeast-1:123456789012:solution/karte-up-v2/97d60ecd"
+  },
+  "copy": null,
+  "top_categories": [
+    "electronics.audio.headphone"
+  ],
+  "contact": {
+    "ok": true,
+    "reasons": []
+  }
+}
+```
+
+- `purchases` / `returns` / `inquiries` は **S3 に置いた分すべて**。`price` はアイテムマスタの最新単価。
+- 検索用に `first_purchase_ts` / `last_purchase_ts` / `*_count_90d` なども返す（一覧検索と同じ値）。
+- `contact.ok=false` なら接触NG（`RETURN_SPIKE` / `RECENT_COMPLAINT` / `NO_KARTE`）。カルテが無ければ 404。
+- `reco` は FULL（Personalize）完了後に `items[]` と `model`（Solution Version）が入る。`price` はアイテムマスタの単価。
+
+### 文案を作る — `POST /karte/{memberId}/copy`
+
+```json
+{
+  "member_id": "85140284181aa2e01985878b055f5de0",
+  "copy": {
+    "subject": "{{customer_name}}様へ、新しいノートパソコンのご案内",
+    "body": "いつもご利用いただきありがとうございます。{{customer_name}}様にお役立ていただけるよう、最新のノートパソコンをご紹介させていただきたくご連絡いたしました。\n\n前回のご購入からしばらく経ちましたが、いかがお過ごしでしょうか。この度、性能と使いやすさを兼ね備えた新しいモデルが入荷いたしました。\n\nご来店いただいた際には、スタッフが丁寧にご説明させていただきます。ご不明な点やご質問がございましたら、いつでもお気軽にお問い合わせください。\n\nご来店をお待ちしております。",
+    "model": "jp.anthropic.claude-haiku-4-5-20251001-v1:0"
+  }
+}
+```
+
+- 宛名は `{{customer_name}}` のまま返る。実名の差し込みは自社サーバが行う（AWS に実名を置かない）。
+- `direction` で訴求点・文体・長さを指示できる。上の例は
+  `direction: "しばらく購入が無いので再来店を促す。クーポンの断定は避ける。絵文字なし。200字程度"`。
+- 上の実行は **Haiku 4.5** で行ったもの（5.5 はアカウントのモデルアクセス付与待ち）。実装は 5.5 前提で、自動フォールバックはしない。
 
 ## ソースデータ仕様（S3 PUT、UTF-8 TSV、ヘッダ付き）
 
@@ -113,9 +280,9 @@ npx cdk deploy KarteStack --outputs-file ../data/outputs.json
 
 ## 運用
 
-1. **PUT**: 自社サーバに `karte-inbound-upload` を付与（またはセットアップ画面で S3 用キーを発行）して上記パスへ。
+1. **PUT**: 自社サーバが `p121k-upload` ロールを引き受け（インスタンスプロファイル / タスクロール / Roles Anywhere）、`karte-inbound-upload` の権限で上記パスへ。
 2. **FULL実行**: Step Functions `karte-reco-pipeline` を起動（学習込みで実証規模で約1時間）。buildだけ試すときは Lambda `Pipeline` に `{"action":"build"}`。
-3. **API呼び出し**: 呼び出し側に `karte-api-invoke` を付与（または API 用キーを発行）し、SigV4で署名する。キーは S3 用と API 用で分ける。
+3. **API呼び出し**: 呼び出し側が `p121k-api` ロールを引き受け、SigV4で署名する（長期キーは使わない）。ロールは S3 用と API 用で分かれている。
 4. **退会**: events に `withdraw` を追記する。急ぐ場合は `DELETE /karte/{id}`。
 5. **後片付け**: `npx cdk destroy KarteStack` のあと、Personalize の Solution / Solution Version を手動削除する（パイプラインが作るため。FULL成功時は旧バージョンを自動削除する）。
 

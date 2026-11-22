@@ -122,3 +122,140 @@ curl -sS --aws-sigv4 "aws:amz:ap-northeast-1:execute-api" \
   --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
   "$API/karte/$MEMBER_ID"
 ```
+
+## IAM 署名（SigV4）の実装例
+
+サービス名は `execute-api`、リージョンは `ap-northeast-1`。
+SDK を使えば署名は自動なので、コードに署名処理を書く必要はない。
+
+### PHP（`aws/aws-sdk-php`）
+
+```bash
+composer require aws/aws-sdk-php guzzlehttp/guzzle
+```
+
+```php
+<?php
+require __DIR__ . '/vendor/autoload.php';
+
+use Aws\Credentials\CredentialProvider;
+use Aws\Signature\SignatureV4;
+use GuzzleHttp\Client;
+use GuzzleHttp\Psr7\Request;
+
+$base   = 'https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/v1';
+$region = 'ap-northeast-1';
+$member = 'ハッシュ化されたmember_id';
+
+// 環境変数 AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY（必要なら AWS_SESSION_TOKEN）から取得
+$credentials = CredentialProvider::defaultProvider()()->wait();
+$signer = new SignatureV4('execute-api', $region);
+$client = new Client();
+
+// --- GET /karte/{memberId} ---
+$request  = new Request('GET', "{$base}/karte/{$member}", ['Accept' => 'application/json']);
+$response = $client->send($signer->signRequest($request, $credentials));
+$karte    = json_decode($response->getBody()->getContents(), true);
+
+// --- POST /karte/{memberId}/copy（JSON ボディも署名対象） ---
+$body = json_encode([
+    'channel'   => 'mail',
+    'direction' => '再来店を促す。絵文字なし。200字程度',
+], JSON_UNESCAPED_UNICODE);
+
+$request = new Request('POST', "{$base}/karte/{$member}/copy", [
+    'Content-Type' => 'application/json',
+    'Accept'       => 'application/json',
+], $body);
+$response = $client->send($signer->signRequest($request, $credentials));
+echo $response->getBody();
+```
+
+### .NET（C#、外部パッケージ不要）
+
+.NET 標準ライブラリだけで署名する例。`AWS SDK` を入れる場合は
+`Amazon.Runtime.Internal.Auth.AWS4Signer` を使えば同じことができる。
+
+```csharp
+using System.Net.Http;
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+
+const string BaseUrl = "https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/v1";
+const string Region  = "ap-northeast-1";
+const string Member  = "ハッシュ化されたmember_id";
+
+var accessKey    = Environment.GetEnvironmentVariable("AWS_ACCESS_KEY_ID")!;
+var secretKey    = Environment.GetEnvironmentVariable("AWS_SECRET_ACCESS_KEY")!;
+var sessionToken = Environment.GetEnvironmentVariable("AWS_SESSION_TOKEN"); // 一時キーのときだけ
+
+// --- GET /karte/{memberId} ---
+var uri     = new Uri($"{BaseUrl}/karte/{Member}");
+var payload = "";                                   // GET は空ボディ
+var body    = await SendAsync(HttpMethod.Get, uri, payload, accessKey, secretKey, sessionToken);
+Console.WriteLine(body);
+
+static async Task<string> SendAsync(HttpMethod method, Uri uri, string payload,
+                                    string accessKey, string secretKey, string? sessionToken)
+{
+    var now      = DateTime.UtcNow;
+    var amzDate  = now.ToString("yyyyMMddTHHmmssZ");
+    var date     = now.ToString("yyyyMMdd");
+    var payloadHash = Hex(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
+
+    // 署名対象ヘッダは必ずアルファベット順。一時キーなら x-amz-security-token も含める
+    var headers = new SortedDictionary<string, string>
+    {
+        ["host"]                 = uri.Host,
+        ["x-amz-content-sha256"] = payloadHash,
+        ["x-amz-date"]           = amzDate,
+    };
+    if (!string.IsNullOrEmpty(sessionToken)) headers["x-amz-security-token"] = sessionToken;
+
+    var canonicalHeaders = string.Concat(headers.Select(h => $"{h.Key}:{h.Value}\n"));
+    var signedHeaders    = string.Join(";", headers.Keys);
+    // クエリはキー名でソートし、各キー・値を URL エンコードする（SigV4 の正規化）
+    var query = string.Join("&", uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
+        .Select(p => p.Split('=', 2))
+        .OrderBy(p => p[0], StringComparer.Ordinal)
+        .Select(p => $"{Uri.EscapeDataString(p[0])}={(p.Length > 1 ? Uri.EscapeDataString(p[1]) : "")}"));
+
+    var canonicalRequest = string.Join("\n", method.Method, uri.AbsolutePath, query,
+                                       canonicalHeaders, signedHeaders, payloadHash);
+    var scope        = $"{date}/{Region}/execute-api/aws4_request";
+    var stringToSign = string.Join("\n", "AWS4-HMAC-SHA256", amzDate, scope,
+                                   Hex(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalRequest))));
+
+    var key = Hmac(Hmac(Hmac(Hmac(Encoding.UTF8.GetBytes("AWS4" + secretKey), date), Region), "execute-api"), "aws4_request");
+    var signature = Hex(Hmac(key, stringToSign));
+
+    using var client = new HttpClient();
+    var req = new HttpRequestMessage(method, uri);
+    foreach (var h in headers.Where(h => h.Key != "host"))
+        req.Headers.TryAddWithoutValidation(h.Key, h.Value);
+    req.Headers.TryAddWithoutValidation("Authorization",
+        $"AWS4-HMAC-SHA256 Credential={accessKey}/{scope}, SignedHeaders={signedHeaders}, Signature={signature}");
+    if (payload.Length > 0) req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+
+    using var res = await client.SendAsync(req);
+    var text = await res.Content.ReadAsStringAsync();
+    if (!res.IsSuccessStatusCode) throw new Exception($"{(int)res.StatusCode}: {text}");
+    return text;
+}
+
+static string Hex(byte[] b) => Convert.ToHexString(b).ToLowerInvariant();
+static byte[] Hmac(byte[] key, string data) => HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(data));
+```
+
+### つまずきやすい点
+
+| 症状 | 原因 |
+|---|---|
+| 403 `Missing Authentication Token` | 署名していない（`Authorization` ヘッダが無い） |
+| 403 `Signature expired` | 端末の時計がずれている（UTC で ±5分以内に） |
+| 403 `The request signature we calculated does not match` | クエリの並び順・URL エンコード・`Content-Type` の不一致。ボディを署名していない |
+| 403 `not authorized to perform: execute-api:Invoke` | 署名は正しいが `karte-api-invoke` が無い（キーとポリシーの取り違え） |
+| 403（日本国外） | WAF の国判定。`geoBlock=true` のとき海外 IP は届かない |
+
+> 実装の元ネタと動作確認済みのサンプル: [YMSTTIME_DAT_API](https://github.com/okamoto53515606/YMSTTIME_DAT_API)（PHP / .NET で SigV4 を実装した実績あり。サービス名だけ `execute-api` に読み替える）
