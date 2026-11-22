@@ -1,0 +1,5 @@
+{
+  "app": "npx ts-node --prefer-ts-exts bin/karte.ts",
+  "watch": { "include": ["**"], "exclude": ["node_modules", "dist", "cdk.out"] },
+  "context": {}
+}
