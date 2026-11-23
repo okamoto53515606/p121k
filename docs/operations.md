@@ -44,7 +44,35 @@
 - **CloudTrail データイベント**（任意）: `-c auditTrail=true` で `inbound/` の読み書きを記録（90日）。
   既定はオフ（データイベントは課金対象）。
 
-## 5. 後片付け
+## 5. 全削除して作り直す場合
+
+CDK のスタック削除では **Personalize のリソースは残る**ため、作り直す前に次を実行する。
+
+```bash
+export AWS_PROFILE=<profile> AWS_REGION=ap-northeast-1
+
+# 1) スタック（S3 / DynamoDB / KMS / API / Lambda / ロール / アラーム）
+cd infra && npx cdk destroy KarteStack --force
+
+# 2) Personalize（学習モデルとデータセット）
+DSG=$(aws personalize list-dataset-groups --query 'datasetGroups[0].datasetGroupArn' --output text)
+SOL=$(aws personalize list-solutions --dataset-group-arn "$DSG" --query 'solutions[0].solutionArn' --output text)
+for v in $(aws personalize list-solution-versions --solution-arn "$SOL" --query 'solutionVersions[].solutionVersionArn' --output text); do
+  aws personalize delete-solution-version --solution-version-arn "$v"
+done
+aws personalize delete-solution --solution-arn "$SOL"
+aws personalize delete-dataset-group --dataset-group-arn "$DSG"
+
+# 3) 残っているログ（必要なら）
+for g in $(aws logs describe-log-groups --query 'logGroups[?contains(logGroupName,`KarteStack`)].logGroupName' --output text); do
+  aws logs delete-log-group --log-group-name "$g"
+done
+```
+
+> Personalize の削除は非同期で、数分かかることがある。削除中に再作成すると名前衝突で失敗するため、
+> `list-dataset-groups` から消えたことを確認してからデプロイする。
+
+## 6. 後片付け
 
 ```
 npx cdk destroy KarteStack
@@ -52,7 +80,7 @@ npx cdk destroy KarteStack
 Personalize の Solution / Solution Version は CDK 管理外なので手動で削除する。
 S3 のソース履歴（`inbound/`）を消すと、カルテも次回 FULL で消える。
 
-## 6. 規模の目安と切り替え
+## 7. 規模の目安と切り替え
 
 | 規模 | 方式 | 根拠 |
 |---|---|---|
