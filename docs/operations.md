@@ -90,7 +90,6 @@ npx cdk deploy KarteStack \
   -c retentionYears=3 \
   -c weeklyFull=false \
   -c geoBlock=true \
-  -c accessKeys=false \
   -c modelId=jp.anthropic.claude-haiku-5-5 \
   -c policyReference=now \
   --require-approval never --outputs-file ../data/outputs.json

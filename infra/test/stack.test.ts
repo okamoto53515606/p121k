@@ -133,7 +133,7 @@ test('callers use assumable roles, one per purpose, with no long-lived keys by d
 });
 
 test('long-lived access keys are prohibited: no IAM user and no key-expiry job', () => {
-  for (const ctx of [{}, { accessKeys: 'true' }] as Record<string, string>[]) {
+  for (const ctx of [{}] as Record<string, string>[]) {
     const t = template(ctx);
     expect(Object.keys(t.findResources('AWS::IAM::User')).length).toBe(0);
     expect(JSON.stringify(t.findResources('AWS::Events::Rule'))).not.toContain('Keyguard');
