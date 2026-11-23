@@ -49,6 +49,12 @@ def main() -> None:
     ap.add_argument("--min-events", type=int, default=5)
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--key-file", default="data/hmac.key")
+    ap.add_argument("--shift-to-now", dest="shift", action="store_true", default=True,
+                    help="最新イベントが「--lag-days 日前」になるよう全時刻を平行移動（既定）")
+    ap.add_argument("--keep-dates", dest="shift", action="store_false",
+                    help="元データの日付（REES46 なら 2019 年）をそのまま使う")
+    ap.add_argument("--lag-days", type=int, default=1,
+                    help="--shift-to-now のとき、最新イベントを何日前に置くか（既定 1）")
     a = ap.parse_args()
 
     rng = random.Random(a.seed)
@@ -144,7 +150,27 @@ def main() -> None:
                 synthetic.append([wts + timedelta(hours=3), m, evs[0][2], "view", ""])
                 returns_n[("late", m)] += 1
 
+    # deliberate anomalies to exercise rejection: free text over 40 chars, unknown category
+    members_l = sorted(members)
+    for n, (cat, note) in enumerate([("other", "これは四十文字を超える自由記述の問い合わせ本文を誤って送った想定のテキストです。電話は090-1234-5678"), ("rage", "")]):
+        inq_id += 1
+        inquiries.append([f"Q{inq_id:07d}", members_l[n], datetime(2019, 10, 4, tzinfo=timezone.utc), cat, note])
+
     all_events = sorted(events + synthetic, key=lambda x: x[0])
+
+    if a.shift:
+        # why: 画面からデプロイすると policyReference は常に now。2019 年のデモデータを
+        #   そのまま流すと全行が保持期間（既定 3 年）の外になり、カルテが空になる。
+        #   最新イベントが「lag_days 日前」になるよう全時刻を平行移動し、直近の
+        #   30/90/180 日集計が自然に効くようにする。
+        latest = max(e[0] for e in all_events)
+        target = datetime.now(timezone.utc) - timedelta(days=a.lag_days)
+        shift = target - latest
+        for e in all_events:
+            e[0] = e[0] + shift
+        for q in inquiries:
+            q[2] = q[2] + shift
+        print(f"shifted {shift.days} days: latest event -> {jst_iso(target)}")
 
     # expected contact policy (verification only)
     ret_count = Counter(e[1] for e in all_events if e[3] == "return")
@@ -178,11 +204,7 @@ def main() -> None:
             for e in all_events[i:i + EVENT_FILE_ROWS]:
                 w.writerow([e[1], e[2], e[3], jst_iso(e[0]), e[4]])
 
-    # deliberate anomalies to exercise rejection: free text over 40 chars, unknown category
-    members_l = sorted(members)
-    for n, (cat, note) in enumerate([("other", "これは四十文字を超える自由記述の問い合わせ本文を誤って送った想定のテキストです。電話は090-1234-5678"), ("rage", "")]):
-        inq_id += 1
-        inquiries.append([f"Q{inq_id:07d}", members_l[n], datetime(2019, 10, 4, tzinfo=timezone.utc), cat, note])
+    # deliberate anomalies are already appended above (they must be shifted too)
     with open(os.path.join(a.out, "inquiries.tsv"), "w", newline="") as f:
         w = csv.writer(f, delimiter="\t", lineterminator="\n")
         w.writerow(["inquiry_id", "member_id", "received_ts", "category", "note"])

@@ -166,6 +166,17 @@ aws s3 cp docs/samples/inquiries.tsv s3://<BucketName>/inbound/inquiries/inquiri
 - 列の定義は [s3-spec](./s3-spec.md) を参照。
 
 > 大量のテストデータを作る場合: `python tools/prepare_data.py`（REES46 のサンプルから 1.5 万会員分を生成）。
+> 既定で「最新イベントが昨日」になるよう日付を平行移動します。画面からのデプロイは保持期間と直近集計の基準日が「今日」なので、元の日付（2019 年）のままだと全件が保持期間外で捨てられます。元の日付を使いたいときは `--keep-dates`。
+
+```bash
+# 生成したデータをまとめて PUT する（<BucketName> は画面 2 の出力）
+RUN=$(date +%Y%m%dT%H%M%S)
+aws s3 cp data/out/items.tsv "s3://<BucketName>/inbound/items/items_$RUN.tsv" --sse aws:kms
+for f in data/out/events_*.tsv; do
+  aws s3 cp "$f" "s3://<BucketName>/inbound/events/$(basename "$f" .tsv)_$RUN.tsv" --sse aws:kms
+done
+aws s3 cp data/out/inquiries.tsv "s3://<BucketName>/inbound/inquiries/inquiries_$RUN.tsv" --sse aws:kms
+```
 
 ---
 
@@ -221,5 +232,6 @@ cd infra && npx cdk destroy KarteStack --force
 | 画面が開かない | `bash setup/start.sh` の表示どおり `http://127.0.0.1:3011` か確認。ポート 3011 の競合に注意 |
 | デプロイが `❌` で止まる | 画面のログ末尾を確認。多くは権限不足か、既存リソースとの名前衝突 |
 | PUT したのにカルテが増えない | 拡張子が `.tsv` か、`member_id` が32桁の16進か。`reports/<run>/rejects.csv` を見る |
+| FULL したのにカルテが 0 件 | イベントが保持期間外。画面からのデプロイは `policyReference=now` なので、古い日付のデモデータは全件捨てられます。`python tools/prepare_data.py`（既定で日付をシフト）で作り直すか、保持年数を延ばす |
 | API が 403 | 署名なし／`p121k-api` ロールを引き受けていない／日本国外からのアクセス（WAF） |
 | `POST /copy` が 502 | モデルが使えない（アカウントのモデルアクセス未付与）。代替モデルへは切り替わらない |
