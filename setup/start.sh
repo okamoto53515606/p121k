@@ -55,10 +55,19 @@ if [[ ! -d node_modules ]]; then
 fi
 
 # 本番ビルドがあればそれを使う（起動が速い）。無ければ開発サーバ。
-if [[ -d .next ]] && [[ "${P121K_SETUP_DEV:-0}" != "1" ]]; then
+# why BUILD_ID を見る: `next dev` も .next を作るため、ディレクトリの有無だけでは
+#   本番ビルドか判別できない。開発用の .next しか無い状態で `next start` を呼ぶと
+#   「Could not find a production build in the '.next' directory」で落ちる。
+if [[ -f .next/BUILD_ID ]] && [[ "${P121K_SETUP_DEV:-0}" != "1" ]]; then
   MODE="start"
 else
   MODE="dev"
+fi
+
+if [[ "$MODE" == "start" ]]; then
+  MODE_LABEL="本番ビルド（next start）"
+else
+  MODE_LABEL="開発モード（next dev / 初回アクセス時にコンパイル）"
 fi
 
 cat <<EOF
@@ -69,6 +78,7 @@ cat <<EOF
   ユーザー: ${P121K_SETUP_USER}
   パスワード: ${P121K_SETUP_PASS}
   （.state/pass に保存。消せば次回起動時に再生成）
+  モード:   ${MODE_LABEL}
   ---------------------------------------------
   停止: Ctrl+C
 

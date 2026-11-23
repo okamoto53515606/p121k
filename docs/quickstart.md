@@ -83,10 +83,17 @@ bash setup/start.sh
   URL:      http://127.0.0.1:3011
   ユーザー: admin
   パスワード: （自動生成。setup/.state/pass に保存）
+  モード:   開発モード（next dev / 初回アクセス時にコンパイル）
 ```
 
 ブラウザで `http://127.0.0.1:3011` を開き、表示された ID / パスワードを入力します。
 この画面は **127.0.0.1 のみ**で待ち受け、Basic 認証つきです（外部からは到達しません）。
+
+> 表示を速くしたい場合は、本番ビルドを作っておくと次回起動から `next start` で立ち上がります（未ビルドなら自動で開発モード）。
+>
+> ```bash
+> cd setup && npx next build && cd ..
+> ```
 
 ---
 
@@ -201,6 +208,7 @@ cd infra && npx cdk destroy KarteStack --force
 | 症状 | 対処 |
 |---|---|
 | `bash setup/start.sh` が `set: pipefail: invalid option name` で止まる | ファイルが CRLF になっています（`core.autocrlf=true` の PC）。「[改行コードは LF のまま使う](#改行コードは-lf-のまま使うエラー防止)」の手順で修正 |
+| `Could not find a production build in the '.next' directory` で止まる | `next dev` が残した開発用の `.next` を本番ビルドと誤認していました（旧版の `start.sh`）。最新の `main` は `.next/BUILD_ID` の有無で判定します。手元で直すには `rm -rf setup/.next`（速くしたいなら `cd setup && npx next build`） |
 | 画面が開かない | `bash setup/start.sh` の表示どおり `http://127.0.0.1:3011` か確認。ポート 3011 の競合に注意 |
 | デプロイが `❌` で止まる | 画面のログ末尾を確認。多くは権限不足か、既存リソースとの名前衝突 |
 | PUT したのにカルテが増えない | 拡張子が `.tsv` か、`member_id` が32桁の16進か。`reports/<run>/rejects.csv` を見る |
