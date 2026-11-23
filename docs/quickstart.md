@@ -47,6 +47,24 @@ cd infra && npm install && cd ..
 cd setup && npm install && cd ..
 ```
 
+### 改行コードは LF のまま使う（エラー防止）
+
+`setup/start.sh` などのスクリプトは **LF 前提**です。`core.autocrlf=true` の PC（Windows の既定など）ではチェックアウト時に CRLF へ変換され、`set: pipefail: invalid option name` で起動できません。
+
+本リポジトリは `.gitattributes` で LF に固定してあるため通常はそのまま動きますが、次の 2 コマンドで確認できます。
+
+```bash
+git config --get core.autocrlf   # 何も出なければ既定。true でも .gitattributes が優先されます
+file setup/start.sh              # "with CRLF line terminators" と出たら下記で修正
+```
+
+古い clone をそのまま使っていて CRLF になっている場合は、次のどちらかで直します。
+
+```bash
+sed -i 's/\r$//' setup/start.sh                              # その場で直す
+git -c core.autocrlf=false clone https://github.com/okamoto53515606/p121k.git   # 取り直す
+```
+
 ---
 
 ## 2. セットアップ画面を起動する
@@ -182,7 +200,7 @@ cd infra && npx cdk destroy KarteStack --force
 
 | 症状 | 対処 |
 |---|---|
-| `bash setup/start.sh` が `set: pipefail: invalid option name` で止まる | クローンしたファイルが CRLF になっています。`git config --get core.autocrlf` が `true` の PC で起こります。`sed -i 's/\r$//' setup/start.sh` で直すか、`git -c core.autocrlf=false clone …` で取り直してください（`.gitattributes` で LF 固定済みのため、最新の `main` では起きません） |
+| `bash setup/start.sh` が `set: pipefail: invalid option name` で止まる | ファイルが CRLF になっています（`core.autocrlf=true` の PC）。「[改行コードは LF のまま使う](#改行コードは-lf-のまま使うエラー防止)」の手順で修正 |
 | 画面が開かない | `bash setup/start.sh` の表示どおり `http://127.0.0.1:3011` か確認。ポート 3011 の競合に注意 |
 | デプロイが `❌` で止まる | 画面のログ末尾を確認。多くは権限不足か、既存リソースとの名前衝突 |
 | PUT したのにカルテが増えない | 拡張子が `.tsv` か、`member_id` が32桁の16進か。`reports/<run>/rejects.csv` を見る |
