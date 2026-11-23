@@ -182,6 +182,7 @@ cd infra && npx cdk destroy KarteStack --force
 
 | 症状 | 対処 |
 |---|---|
+| `bash setup/start.sh` が `set: pipefail: invalid option name` で止まる | クローンしたファイルが CRLF になっています。`git config --get core.autocrlf` が `true` の PC で起こります。`sed -i 's/\r$//' setup/start.sh` で直すか、`git -c core.autocrlf=false clone …` で取り直してください（`.gitattributes` で LF 固定済みのため、最新の `main` では起きません） |
 | 画面が開かない | `bash setup/start.sh` の表示どおり `http://127.0.0.1:3011` か確認。ポート 3011 の競合に注意 |
 | デプロイが `❌` で止まる | 画面のログ末尾を確認。多くは権限不足か、既存リソースとの名前衝突 |
 | PUT したのにカルテが増えない | 拡張子が `.tsv` か、`member_id` が32桁の16進か。`reports/<run>/rejects.csv` を見る |

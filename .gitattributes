@@ -1,0 +1,26 @@
+# why: 改行コードを LF に固定する。
+#   core.autocrlf=true の環境（Windows 既定や、そう設定した PC）では
+#   チェックアウト時に CRLF へ変換され、setup/start.sh が
+#   「set: pipefail: invalid option name」で即終了する。
+#   .gitattributes の eol=lf は autocrlf より優先されるため、
+#   誰が clone してもシェルスクリプトは LF で展開される。
+* text=auto eol=lf
+
+*.sh text eol=lf
+*.tsv text eol=lf
+*.csv text eol=lf
+*.json text eol=lf
+*.py text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.md text eol=lf
+*.yml text eol=lf
+
+# バイナリ（変換しない）
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.zip binary
+*.pdf binary

@@ -150,8 +150,10 @@ def main() -> None:
     ret_count = Counter(e[1] for e in all_events if e[3] == "return")
     wd = {e[1] for e in all_events if e[3] == "withdraw"}
     comp = {q[1] for q in inquiries if q[3] == "complaint"}
+    # why lineterminator="\n": csv の既定は CRLF。TSV に \r が混ざると
+    #   awk/jq などで扱いにくく、git の改行設定でも揺れるため LF に固定する。
     with open(os.path.join(a.out, "truth.csv"), "w", newline="") as f:
-        w = csv.writer(f)
+        w = csv.writer(f, lineterminator="\n")
         w.writerow(["member_id", "expected_contact", "reasons"])
         for m in members:
             reasons = []
@@ -164,13 +166,14 @@ def main() -> None:
             w.writerow([m, "ng" if reasons else "ok", "|".join(reasons)])
 
     with open(os.path.join(a.out, "items.tsv"), "w", newline="") as f:
-        w = csv.DictWriter(f, fieldnames=["item_id", "item_name", "item_description", "category", "price"], delimiter="\t")
+        w = csv.DictWriter(f, fieldnames=["item_id", "item_name", "item_description", "category", "price"],
+                           delimiter="\t", lineterminator="\n")
         w.writeheader()
         w.writerows(items.values())
 
     for i in range(0, len(all_events), EVENT_FILE_ROWS):
         with open(os.path.join(a.out, f"events_{i // EVENT_FILE_ROWS:03d}.tsv"), "w", newline="") as f:
-            w = csv.writer(f, delimiter="\t")
+            w = csv.writer(f, delimiter="\t", lineterminator="\n")
             w.writerow(["member_id", "item_id", "event_type", "event_ts", "reason"])
             for e in all_events[i:i + EVENT_FILE_ROWS]:
                 w.writerow([e[1], e[2], e[3], jst_iso(e[0]), e[4]])
@@ -181,7 +184,7 @@ def main() -> None:
         inq_id += 1
         inquiries.append([f"Q{inq_id:07d}", members_l[n], datetime(2019, 10, 4, tzinfo=timezone.utc), cat, note])
     with open(os.path.join(a.out, "inquiries.tsv"), "w", newline="") as f:
-        w = csv.writer(f, delimiter="\t")
+        w = csv.writer(f, delimiter="\t", lineterminator="\n")
         w.writerow(["inquiry_id", "member_id", "received_ts", "category", "note"])
         for q in inquiries:
             w.writerow([q[0], q[1], jst_iso(q[2]), q[3], q[4]])
