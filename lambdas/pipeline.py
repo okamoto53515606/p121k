@@ -131,25 +131,24 @@ def load(state: dict) -> dict:
     return {**state, "status": "DONE", "loaded": {"updated": updated, "skipped_missing": skipped, "errors": errors, "late_api_deletes": late}}
 
 
-def prune_versions(state: dict) -> dict:
-    """Delete superseded solution versions so withdrawn members do not live on in old trained models.
-    Runs after `load`, so recommendations are already copied into the karte."""
-    p, keep = personalize(), state["solution_version_arn"]
-    deleted, failed = [], []
-    for v in p.list_solution_versions(solutionArn=state["solution_arn"])["solutionVersions"]:
-        arn = v["solutionVersionArn"]
-        if arn == keep:
-            continue
-        try:
-            p.delete_solution_version(solutionVersionArn=arn)
-            deleted.append(arn)
-        except Exception as e:  # noqa: BLE001 - e.g. still referenced by a running batch job
-            failed.append(f"{arn}: {str(e)[:80]}")
-    log.info(json.dumps({"action": "prune_versions", "deleted": len(deleted), "failed": failed}))
-    return {**state, "status": "DONE", "pruned": {"deleted": len(deleted), "failed": failed}}
+def reset_solution(state: dict) -> dict:
+    """Delete the solution after the batch output has been copied into the karte.
+
+    Personalize has no DeleteSolutionVersion API, so old versions cannot be removed
+    one by one. Deleting the whole solution removes every version at once; the next
+    FULL creates a fresh solution and retrains from the current data (which already
+    excludes withdrawn members). One model exists at a time.
+    """
+    arn, failed = state.get("solution_arn", ""), None
+    try:
+        personalize().delete_solution(solutionArn=arn)
+    except Exception as e:  # noqa: BLE001 - e.g. still deleting from the previous run
+        failed = str(e)[:120]
+    log.info(json.dumps({"action": "reset_solution", "solution": arn, "failed": failed}))
+    return {**state, "status": "DONE", "solution_reset": {"deleted": failed is None, "error": failed}}
 
 
-ACTIONS = {f.__name__: f for f in (build, start_imports, check_imports, ensure_solution, start_train, check_train, start_batch, check_batch, load, prune_versions)}
+ACTIONS = {f.__name__: f for f in (build, start_imports, check_imports, ensure_solution, start_train, check_train, start_batch, check_batch, load, reset_solution)}
 
 
 def handler(event, _ctx):

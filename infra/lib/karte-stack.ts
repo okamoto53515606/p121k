@@ -143,7 +143,7 @@ export class KarteStack extends Stack {
     pipelineFn.addToRolePolicy(new iam.PolicyStatement({
       actions: ['personalize:CreateDatasetImportJob', 'personalize:DescribeDatasetImportJob', 'personalize:CreateSolutionVersion', 'personalize:DescribeSolutionVersion',
         'personalize:CreateBatchInferenceJob', 'personalize:CreateSolution', 'personalize:ListSolutions', 'personalize:DescribeBatchInferenceJob', 'personalize:DescribeDataset', 'personalize:DescribeSolution',
-        'personalize:ListSolutionVersions', 'personalize:DeleteSolutionVersion'],
+        'personalize:ListSolutionVersions', 'personalize:DeleteSolution'],
       resources: ['*'],
     }));
     pRole.grantPassRole(pipelineFn.grantPrincipal);
@@ -171,13 +171,13 @@ export class KarteStack extends Stack {
     const ensureSol = step('ensure_solution');
     const startBatch = step('start_batch');
     const loadS = step('load');
-    const pruneS = step('prune_versions');
+    const resetS = step('reset_solution');
     exportS.next(startImports);
     poll('imports', startImports, 'check_imports', Duration.minutes(1), ensureSol);
     ensureSol.next(startTrain);
     poll('train', startTrain, 'check_train', Duration.minutes(5), startBatch);
     poll('batch', startBatch, 'check_batch', Duration.minutes(2), loadS);
-    loadS.next(pruneS);
+    loadS.next(resetS);
     const pipeline = new sfn.StateMachine(this, 'RecoPipeline', {
       stateMachineName: 'karte-reco-pipeline', definitionBody: sfn.DefinitionBody.fromChainable(exportS),
       timeout: Duration.hours(12),

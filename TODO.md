@@ -11,7 +11,7 @@
 - [x] **退会データが残りうる場所の棚卸しと対処**（原則7に関わる）
   - [x] CloudWatch Logs: 会員IDは `member_tag`（SHA-256 先頭10桁）のみ。APIアクセスログは `resourcePath`（テンプレート）だけを記録。E2E で 0 件を検証
   - [x] DynamoDB の PITR 明示無効（`pointInTimeRecoverySpecification: false`）と運用の明文化（docs/operations.md）
-  - [x] Personalize の旧 Solution Version を FULL 成功後に自動削除（`prune_versions`）
+  - [x] Personalize の学習モデルの残存対策: **Solution Version 単体の削除 API は存在しない**ため、FULL 成功後に Solution ごと削除し、次回は最新データで作り直す（`reset_solution`）
 - [x] **セットアップ画面**（`setup/`、`newcleus/setup` 方式）
   - [x] デプロイ / 更新 / 削除（CDK 実行、非同期＋ログ表示）
   - [x] FULL の手動起動と実行状況表示

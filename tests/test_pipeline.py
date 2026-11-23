@@ -3,17 +3,25 @@ import pipeline
 
 
 
-def test_prune_versions_keeps_current_and_tolerates_in_use(monkeypatch):
-    class Fake:
-        def list_solution_versions(self, solutionArn):
-            return {"solutionVersions": [{"solutionVersionArn": "arn:keep"},
-                                         {"solutionVersionArn": "arn:old1"},
-                                         {"solutionVersionArn": "arn:old2"}]}
+def test_reset_solution_deletes_the_whole_solution(monkeypatch):
+    """Personalize has no DeleteSolutionVersion API; a full reset is the only way
+    to stop old (pre-withdrawal) models from lingering."""
+    calls = {}
 
-        def delete_solution_version(self, solutionVersionArn):
-            if solutionVersionArn == "arn:old2":
-                raise RuntimeError("ResourceInUse")
+    class Fake:
+        def delete_solution(self, solutionArn):
+            calls["arn"] = solutionArn
 
     monkeypatch.setattr(pipeline, "_p", Fake())
-    out = pipeline.prune_versions({"solution_arn": "arn:solution", "solution_version_arn": "arn:keep"})
-    assert out["pruned"]["deleted"] == 1 and len(out["pruned"]["failed"]) == 1
+    out = pipeline.reset_solution({"solution_arn": "arn:solution"})
+    assert calls["arn"] == "arn:solution" and out["solution_reset"]["deleted"] is True
+
+
+def test_reset_solution_tolerates_a_concurrent_delete(monkeypatch):
+    class Fake:
+        def delete_solution(self, solutionArn):
+            raise RuntimeError("ResourceInUseException")
+
+    monkeypatch.setattr(pipeline, "_p", Fake())
+    out = pipeline.reset_solution({"solution_arn": "arn:solution"})
+    assert out["solution_reset"]["deleted"] is False and "ResourceInUse" in out["solution_reset"]["error"]

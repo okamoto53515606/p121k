@@ -67,7 +67,7 @@ flowchart LR
 
   subgraph aws["AWS 日本リージョン（保存は東京）"]
     s3in[("S3 inbound/*.tsv")]
-    sfn["Step Functions<br/>build → import → train → batch → load → prune"]
+    sfn["Step Functions<br/>build → import → train → batch → load → reset"]
     karte[("DynamoDB カルテ<br/>+ 検索GSI")]
     pers["Amazon Personalize<br/>User-Personalization-v2<br/>（バッチ推論のみ）"]
     apigw["API Gateway<br/>IAM署名 + WAF（日本国外を遮断）"]
