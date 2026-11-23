@@ -123,7 +123,7 @@ bash setup/start.sh
 | 週次 FULL | オフ | オンにすると毎週日曜 03:00 (JST) に自動実行 |
 | 通知メール | 空 | パイプライン失敗などを SNS からメール通知 |
 | API の IP 制限 | 空 | 指定すると API を送信元 IP で制限 |
-| モデル | `jp.anthropic.claude-haiku-5-5` | 文案生成に使うモデル。アカウントでモデルアクセスが有効なものを指定（例: `jp.anthropic.claude-haiku-4-5`） |
+| モデル | `jp.anthropic.claude-haiku-5-5` | 文案生成に使うモデル。**Bedrock のモデルID / 推論プロファイルID をそのまま書く**（例: `jp.anthropic.claude-haiku-5-5`、`jp.anthropic.claude-haiku-4-5-20251001-v1:0`）。`aws bedrock list-inference-profiles` で確認できる |
 | S3 の IP 許可リスト | 空 | 指定すると S3 への PUT をその CIDR だけに限定 |
 | ロールを引き受けさせる相手 | 空 | 別アカウントのロールに許可する場合の ARN |
 | CloudTrail | オフ | S3 への読み書きを記録（課金あり） |
@@ -190,6 +190,10 @@ aws s3 cp data/out/inquiries.tsv "s3://<BucketName>/inbound/inquiries/inquiries_
 
 ![FULL 実行](screenshot/06-full.png)
 
+実行中は `RUNNING`、終わると `SUCCEEDED` と開始・終了時刻が並びます。
+
+![FULL 完了](screenshot/06b-full-done.png)
+
 - 実証規模（1.5 万会員・約 24 万イベント）で **約 1 時間**（学習が大半）。
 - 完了すると、各カルテに `reco`（おすすめ商品）が入ります。
 
@@ -201,17 +205,38 @@ aws s3 cp data/out/inquiries.tsv "s3://<BucketName>/inbound/inquiries/inquiries_
 
 ![API 呼び出し](screenshot/07-api.png)
 
+**セルフテスト**: 画面の「API のセルフテスト」を押すと、署名なし（403）→ 署名あり（404/200）をその場で確認できます。
+
+手元から試す場合は `p121k-api` ロールを引き受けて、SigV4 で署名します。
+
 ```bash
-# 例: ロールを引き受けて（AWS 上ならインスタンスプロファイル等で自動）呼ぶ
-awscurl --service execute-api --region ap-northeast-1 \
-  "https://xxxx.execute-api.ap-northeast-1.amazonaws.com/v1/karte/<memberId>"
+# 1) ロールを引き受ける（AWS 上ならインスタンスプロファイル等で自動）
+CREDS=$(aws sts assume-role --role-arn <ApiRoleArn> \
+  --role-session-name p121k-call --query Credentials --output json)
+export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r .AccessKeyId)
+export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r .SecretAccessKey)
+export AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r .SessionToken)
+
+# 2) カルテを取得（<ApiUrl> は画面 2 の出力、末尾の / を忘れずに）
+curl -s --aws-sigv4 "aws:amz:ap-northeast-1:execute-api" \
+  --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+  -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
+  "<ApiUrl>karte/<memberId>" \
+  | jq '{contact, counts, reco_count: (.reco.items | length)}'
 ```
 
-- 認証は IAM（SigV4）のみ。ブラウザからは呼べません。
-- カルテが無い（未登録・退会・削除）は **404**。これは「接触NG」として扱います。
-- 文案生成は `POST /karte/<memberId>/copy`（リアルタイム）。
+| 呼び出し | 期待される結果 |
+|---|---|
+| 署名なし `GET /karte/<id>` | 403 |
+| 署名あり `GET /karte/<id>` | 200（`contact.ok` が接触可否、`reco` がおすすめ） |
+| 退会・未登録・削除済み | 404（`contact.reasons` が `["NO_KARTE"]`） |
+| `GET /karte/<id>/reco` | 200（接触NGなら `items` は空） |
+| `POST /karte/<id>/copy` | 200（接触NGなら 409 `CONTACT_NG`） |
+| `GET /karte/search?by=last_purchase&limit=10&older_than_days=30` | 200（該当件数と一覧） |
 
-「API のセルフテスト」を押すと、署名なし → 403、署名あり → 404/200 を確認できます。
+- 認証は IAM（SigV4）のみ。ブラウザからは呼べません（長期キーも使いません）。
+- `curl --aws-sigv4` はクエリ文字列をそのまま署名するため、**`/karte/search` のパラメータはアルファベット順**に並べます（`by` → `limit` → `older_than_days`）。順序を変えると 403 `SignatureDoesNotMatch` になります。
+- 文案生成は `POST /karte/<id>/copy` です。本文に `{"channel":"email","tone":"丁寧","direction":"来月の新商品を軽く紹介して返信を促す"}` のような指示を渡せます。
 
 ---
 
@@ -238,4 +263,4 @@ cd infra && npx cdk destroy KarteStack --force
 | PUT したのにカルテが増えない | 拡張子が `.tsv` か、`member_id` が32桁の16進か。`reports/<run>/rejects.csv` を見る |
 | FULL したのにカルテが 0 件 | イベントが保持期間外。画面からのデプロイは `policyReference=now` なので、古い日付のデモデータは全件捨てられます。`python tools/prepare_data.py`（既定で日付をシフト）で作り直すか、保持年数を延ばす |
 | API が 403 | 署名なし／`p121k-api` ロールを引き受けていない／日本国外からのアクセス（WAF） |
-| `POST /copy` が 502 | モデルが使えない（アカウントのモデルアクセス未付与）。代替モデルへは切り替わらない |
+| `POST /copy` が 502 | API Lambda のログを見る。`ValidationException: The provided model identifier is invalid` ならモデルIDの綴り違い（4.5 は `jp.anthropic.claude-haiku-4-5-20251001-v1:0` のように日付まで含む）。`AccessDeniedException` ならアカウントのモデルアクセス未付与。代替モデルへは切り替わらない |
