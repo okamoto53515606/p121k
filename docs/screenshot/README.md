@@ -12,7 +12,9 @@
 | `04a-deploy-running.png` | 「2. デプロイ」の実行中（スタック状態とイベントログ） |
 | `04-deploy.png` | 「2. デプロイ」で `✅ KarteStack` と Outputs が出た状態 |
 | `05-put.png` | 「3. データのPUT」と、PUT 後の S3 の様子 |
-| `06-full.png` | 「4. FULL の実行」で SUCCEEDED になった状態 |
+| `05-put-2.png` | S3 コンソールで `inbound/events/` にオブジェクトが並んだ状態 |
+| `06-full.png` | 「4. FULL の実行」のカード（開始前） |
+| `06b-full-done.png` | FULL が SUCCEEDED になり、カルテ件数などが出た状態 |
 | `07-api.png` | 「5. 社内システム連携」のロール ARN とサンプル、セルフテスト結果 |
 
 - 幅は 1000〜1400px 程度、PNG。

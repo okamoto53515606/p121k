@@ -158,6 +158,10 @@ aws s3 cp docs/samples/inquiries.tsv s3://<BucketName>/inbound/inquiries/inquiri
 
 ![データのPUT](screenshot/05-put.png)
 
+S3 に置かれると、AWS コンソールの `inbound/` 以下で確認できます。
+
+![S3 に置かれた状態](screenshot/05-put-2.png)
+
 **注意点**
 
 - 拡張子は `.tsv` のみ。`.csv` は取り込まれません（カンマを含む商品名で壊れるため）。
