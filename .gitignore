@@ -18,6 +18,8 @@ setup/.state/
 setup/setup-state.json
 setup/state-outputs.json
 next-env.d.ts
+# `next dev` が毎回自動生成するエージェント向けメモ（setup 画面では使わない）
+setup/AGENTS.md
 infra/dist/
 infra/cdk.out/
 cdk.out/
