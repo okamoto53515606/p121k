@@ -41,6 +41,8 @@ IAM（SigV4）認証のみ。ブラウザから直接呼ぶ経路は無い。
 ```
 
 - `purchases` / `returns` / `inquiries` は **S3 に置いた分をすべて**返す（省略しない）。`price` はアイテムマスタの**最新**単価。
+- `copy` は **`POST /karte/{memberId}/copy` を呼ぶまで `null`**。呼ぶと生成結果がこの属性に保存され、以後の GET で返る（呼ぶたびに上書き、FULL 再構築でも保持）。
+- `reco` は FULL（Personalize）完了後に埋まる。
 - カルテが無い（未登録・退会・削除）→ **404** `{"error":"NOT_FOUND","contact":{"ok":false,"reasons":["NO_KARTE"]}}`。
   404 は「接触NG」として扱うこと。
 

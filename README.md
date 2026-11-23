@@ -206,6 +206,7 @@ flowchart LR
 - 検索用に `first_purchase_ts` / `last_purchase_ts` / `*_count_90d` なども返す（一覧検索と同じ値）。
 - `contact.ok=false` なら接触NG（`RETURN_SPIKE` / `RECENT_COMPLAINT` / `NO_KARTE`）。カルテが無ければ 404。
 - `reco` は FULL（Personalize）完了後に `items[]` と `model`（Solution Version）が入る。`price` はアイテムマスタの単価。
+- `copy` は `POST /karte/{id}/copy` を呼んだ後に埋まる（呼ぶまでは `null`）。呼ぶたびに上書きされ、FULL 再構築でも保持される。上の例は未生成の会員。
 
 ### 文案を作る — `POST /karte/{memberId}/copy`
 
