@@ -55,6 +55,50 @@ export interface ExecutionInfo {
   cause?: string;
 }
 
+/** Bedrock に存在するモデル/推論プロファイルか確認する。
+ *
+ *  戻り値: 問題なければ null、ID が存在しなければ理由の文字列。
+ *  `bedrock:GetInferenceProfile` などの権限が無い場合は、誤ってデプロイを
+ *  止めないよう「判定不能 = null」として通す（デプロイ後の呼び出しで気づける）。
+ */
+export async function checkModelId(modelId: string, s: AwsSession): Promise<string | null> {
+  const isArn = modelId.startsWith("arn:");
+  const attempts: string[][] = isArn
+    ? [["bedrock", "get-inference-profile", "--inference-profile-identifier", modelId]]
+    : [
+        ["bedrock", "get-inference-profile", "--inference-profile-identifier", modelId],
+        ["bedrock", "get-foundation-model", "--model-identifier", modelId],
+      ];
+  let notFound = false;
+  for (const args of attempts) {
+    try {
+      await awsJson(args, s, 20_000);
+      return null;
+    } catch (e) {
+      const msg = (e as Error).message;
+      if (/not ?found|does not exist|could not be found/i.test(msg)) notFound = true;
+    }
+  }
+  if (!notFound) return null;
+
+  let hint = "";
+  try {
+    const r = await awsJson<{ inferenceProfileSummaries: { inferenceProfileId: string }[] }>(
+      ["bedrock", "list-inference-profiles"],
+      s,
+      20_000,
+    );
+    const ids = (r.inferenceProfileSummaries ?? [])
+      .map((x) => x.inferenceProfileId)
+      .filter((x) => x.includes("anthropic"))
+      .slice(0, 4);
+    if (ids.length) hint = ` 利用できる例: ${ids.join(" / ")}`;
+  } catch {
+    // 候補の取得に失敗しても、存在しない事実は伝える
+  }
+  return `モデルIDが見つかりません: ${modelId}。${hint}`.trim();
+}
+
 /** 直近の Step Functions 実行を取得 */
 export async function latestExecution(stateMachineArn: string, s: AwsSession): Promise<ExecutionInfo | null> {
   const res = await awsJson<{ executions: { executionArn: string; status: string; startDate: string; stopDate?: string }[] }>(

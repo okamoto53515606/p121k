@@ -83,7 +83,12 @@ export function validateSettings(input: unknown): { ok: true; settings: Settings
   const allowedCidrs = String(b.allowedCidrs ?? "").trim();
   if (allowedCidrs && !/^[0-9a-fA-F.:/,\s]+$/.test(allowedCidrs)) return { ok: false, error: "IP制限は CIDR をカンマ区切りで指定してください" };
   const modelId = String(b.modelId ?? DEFAULT_SETTINGS.modelId).trim();
-  if (!/^[a-z0-9.-]+$/.test(modelId)) return { ok: false, error: "モデルIDの形式が不正です" };
+  // why この文字種: Bedrock のモデルIDは `...-v1:0` のようにコロンを含み、
+  //   推論プロファイルは `jp.` / `global.` などの接頭辞や ARN も取りうる。
+  //   シェルには配列で渡す（execFile）ため注入の心配は無いが、文字種と長さは絞る。
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:\-/]{0,199}$/.test(modelId)) {
+    return { ok: false, error: "モデルIDの形式が不正です（例: jp.anthropic.claude-haiku-5-5）" };
+  }
   const uploadCidrs = String(b.uploadCidrs ?? "").trim();
   if (uploadCidrs && !/^[0-9a-fA-F.:/,\s]+$/.test(uploadCidrs)) return { ok: false, error: "S3のIP制限は CIDR をカンマ区切りで指定してください" };
   return {

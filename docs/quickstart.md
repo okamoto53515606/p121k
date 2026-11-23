@@ -238,6 +238,13 @@ curl -s --aws-sigv4 "aws:amz:ap-northeast-1:execute-api" \
 - `curl --aws-sigv4` はクエリ文字列をそのまま署名するため、**`/karte/search` のパラメータはアルファベット順**に並べます（`by` → `limit` → `older_than_days`）。順序を変えると 403 `SignatureDoesNotMatch` になります。
 - 文案生成は `POST /karte/<id>/copy` です。本文に `{"channel":"email","tone":"丁寧","direction":"来月の新商品を軽く紹介して返信を促す"}` のような指示を渡せます。
 
+> テストに使う会員IDは、生成したデータから取れます（HMAC なので、キーが違えば値も変わります）。
+>
+> ```bash
+> cut -f1 data/out/truth.csv | sed -n '2p;3p'      # 在籍している会員
+> grep -m1 WITHDRAWN data/out/truth.csv | cut -f1  # 退会済み（404 の確認用）
+> ```
+
 ---
 
 ## 9. 後片付け
@@ -260,6 +267,7 @@ cd infra && npx cdk destroy KarteStack --force
 | `Could not find a production build in the '.next' directory` で止まる | `next dev` が残した開発用の `.next` を本番ビルドと誤認していました（旧版の `start.sh`）。最新の `main` は `.next/BUILD_ID` の有無で判定します。手元で直すには `rm -rf setup/.next`（速くしたいなら `cd setup && npx next build`） |
 | 画面が開かない | `bash setup/start.sh` の表示どおり `http://127.0.0.1:3011` か確認。ポート 3011 の競合に注意 |
 | デプロイが `❌` で止まる | 画面のログ末尾を確認。多くは権限不足か、既存リソースとの名前衝突 |
+| モデルIDが「形式が不正」または「見つかりません」で止まる | 画面はデプロイ前に Bedrock へ問い合わせて ID を検証します。`jp.anthropic.claude-haiku-4-5-20251001-v1:0` のように**日付と `-v1:0` まで含む**のが正しい形。`aws bedrock list-inference-profiles` の `inferenceProfileId` をそのまま貼るのが確実 |
 | PUT したのにカルテが増えない | 拡張子が `.tsv` か、`member_id` が32桁の16進か。`reports/<run>/rejects.csv` を見る |
 | FULL したのにカルテが 0 件 | イベントが保持期間外。画面からのデプロイは `policyReference=now` なので、古い日付のデモデータは全件捨てられます。`python tools/prepare_data.py`（既定で日付をシフト）で作り直すか、保持年数を延ばす |
 | API が 403 | 署名なし／`p121k-api` ロールを引き受けていない／日本国外からのアクセス（WAF） |

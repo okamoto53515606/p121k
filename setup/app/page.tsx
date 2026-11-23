@@ -166,8 +166,8 @@ export default function Page() {
               <input type="text" value={settings.allowedCidrs} placeholder="203.0.113.0/24"
                 onChange={(e) => setSettings({ ...settings, allowedCidrs: e.target.value })} />
             </label>
-            <label className="field"><span>文案生成モデル</span>
-              <input type="text" value={settings.modelId}
+            <label className="field"><span>文案生成モデル（Bedrock のモデルID / 推論プロファイルID）</span>
+              <input type="text" value={settings.modelId} placeholder="jp.anthropic.claude-haiku-4-5-20251001-v1:0"
                 onChange={(e) => setSettings({ ...settings, modelId: e.target.value })} />
             </label>
           </div>
