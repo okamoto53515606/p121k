@@ -80,7 +80,38 @@ npx cdk destroy KarteStack
 Personalize の Solution / Solution Version は CDK 管理外なので手動で削除する。
 S3 のソース履歴（`inbound/`）を消すと、カルテも次回 FULL で消える。
 
-## 7. 規模の目安と切り替え
+## 7. 上級者向け: 画面を使わずにデプロイする
+
+通常はセットアップ画面を使う。CI や検証で同じ設定をコマンドから渡す場合の一覧。
+
+```bash
+cd infra
+npx cdk deploy KarteStack \
+  -c retentionYears=3 \
+  -c weeklyFull=false \
+  -c geoBlock=true \
+  -c accessKeys=false \
+  -c modelId=jp.anthropic.claude-haiku-5-5 \
+  -c policyReference=now \
+  --require-approval never --outputs-file ../data/outputs.json
+```
+
+| key | 既定 | 意味 |
+|---|---|---|
+| `retentionYears` | `3` | ソース履歴の保持年数 |
+| `weeklyFull` | `false` | 毎週日曜 03:00 (JST) の FULL を有効化 |
+| `alertEmail` | なし | 障害通知のメール購読 |
+| `allowedCidrs` | なし | API の送信元 IP 制限 |
+| `uploadCidrs` | なし | S3 への PUT を許可する CIDR |
+| `geoBlock` | `true` | WAF で日本国外からの API を遮断 |
+| `auditTrail` | `false` | CloudTrail データイベント（課金あり） |
+| `modelId` | `jp.anthropic.claude-haiku-5-5` | 文案生成モデル |
+| `callerPrincipalArns` | なし | 別アカウントのロールに引き受けを許可 |
+| `policyReference` | `now` | **検証用**。過去日付のデモデータを流すときだけ `last_event` |
+
+> 画面からデプロイすると `policyReference` は常に `now` になる。過去データのデモだけ CLI を使う。
+
+## 8. 規模の目安と切り替え
 
 | 規模 | 方式 | 根拠 |
 |---|---|---|

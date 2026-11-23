@@ -8,8 +8,34 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$SCRIPT_DIR"
 
+PORT="${P121K_SETUP_PORT:-3011}"
 mkdir -p .state
 chmod 700 .state
+
+# why: 前回のプロセスが残っていると EADDRINUSE で起動できない。
+#      自分たちの Next サーバ（next-server / next start）だけを止めて再利用する。
+port_pids() {
+  ss -ltnp "sport = :${PORT}" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 | sort -u || true
+}
+pids="$(port_pids || true)"
+if [[ -n "$pids" ]]; then
+  ours=""
+  for pid in $pids; do
+    cmd="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    case "$cmd" in
+      *next-server*|*"next start"*|*"next dev"*) ours="$ours $pid" ;;
+    esac
+  done
+  if [[ -n "$ours" ]]; then
+    echo "前回のセットアップ画面を停止します（PID:$ours）"
+    kill $ours 2>/dev/null || true
+    for _ in 1 2 3 4 5; do [[ -z "$(port_pids)" ]] && break; sleep 1; done
+  fi
+  if [[ -n "$(port_pids)" ]]; then
+    echo "ポート ${PORT} は他のアプリが使用中です。3021 で起動します。"
+    PORT=3021
+  fi
+fi
 
 if [[ -z "${P121K_SETUP_USER:-}" ]]; then
   export P121K_SETUP_USER="admin"
@@ -39,7 +65,7 @@ cat <<EOF
 
   P121K セットアップ画面
   ---------------------------------------------
-  URL:      http://127.0.0.1:3011
+  URL:      http://127.0.0.1:${PORT}
   ユーザー: ${P121K_SETUP_USER}
   パスワード: ${P121K_SETUP_PASS}
   （.state/pass に保存。消せば次回起動時に再生成）
@@ -48,4 +74,8 @@ cat <<EOF
 
 EOF
 
-exec npm run "$MODE"
+if [[ "$MODE" == "start" ]]; then
+  exec npx next start -p "$PORT" -H 127.0.0.1
+else
+  exec npx next dev -p "$PORT" -H 127.0.0.1
+fi

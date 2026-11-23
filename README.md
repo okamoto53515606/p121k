@@ -256,27 +256,8 @@ bash setup/start.sh
 アクセスキーは**サーバのメモリにのみ保持**し、ディスクには書きません（再起動時は再入力）。
 詳細とセキュリティ設計は [setup/README.md](./setup/README.md)。
 
-**CLI**
-
-```bash
-export AWS_PROFILE=<profile> AWS_REGION=ap-northeast-1
-python3 -m venv .venv && .venv/bin/pip install boto3 pytest moto
-.venv/bin/python -m pytest tests -q
-cd infra && npm i && npx jest
-npx cdk deploy KarteStack --outputs-file ../data/outputs.json
-```
-
-デプロイ時のオプション（`-c key=value`）:
-
-| key | 既定 | 意味 |
-|---|---|---|
-| `retentionYears` | `3` | ソース履歴の保持年数 |
-| `weeklyFull` | `false` | `true`で毎週日曜03:00(JST)にFULLパイプラインを自動起動 |
-| `allowedCidrs` | なし | APIを送信元IPで制限（カンマ区切り） |
-| `alertEmail` | なし | 指定すると障害通知メールを SNS `karte-alerts` へ購読 |
-| `auditTrail` | `false` | `true`で CloudTrail のデータイベントを `inbound/` に有効化（課金あり） |
-| `modelId` | `jp.anthropic.claude-haiku-5-5` | 文案生成モデル。利用不可ならエラーにする（代替モデルへの切替はしない） |
-| `policyReference` | `now` | 過去日付のデモデータを流すときだけ `last_event` |
+設定はすべて画面から行えます（保持年数・週次 FULL・通知先・IP 制限・監査・モデル）。
+コマンドラインで同じ値を使う場合の一覧は [docs/operations.md](./docs/operations.md) を参照してください。
 
 ## 運用
 
@@ -284,7 +265,7 @@ npx cdk deploy KarteStack --outputs-file ../data/outputs.json
 2. **FULL実行**: Step Functions `karte-reco-pipeline` を起動（学習込みで実証規模で約1時間）。buildだけ試すときは Lambda `Pipeline` に `{"action":"build"}`。
 3. **API呼び出し**: 呼び出し側が `p121k-api` ロールを引き受け、SigV4で署名する（長期キーは使わない）。ロールは S3 用と API 用で分かれている。
 4. **退会**: events に `withdraw` を追記する。急ぐ場合は `DELETE /karte/{id}`。
-5. **後片付け**: `npx cdk destroy KarteStack` のあと、Personalize の Solution / Solution Version を手動削除する（パイプラインが作るため。FULL成功時は旧バージョンを自動削除する）。
+5. **後片付け**: 画面の「6. 削除」を使う。Personalize の Solution / Solution Version は残るため、不要なら `docs/operations.md` の手順で削除する。
 
 障害時の見方、監視項目、規模の切り替えは [docs/operations.md](./docs/operations.md) を参照。
 自社側（PUTする側）の参考実装は `tools/ingest_side.py`（HMAC仮名化・問い合わせの分類コード化・withdraw出力）。
