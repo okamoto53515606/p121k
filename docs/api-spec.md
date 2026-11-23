@@ -3,7 +3,7 @@
 IAM（SigV4）認証のみ。ブラウザから直接呼ぶ経路は無い。
 
 - ベース URL: `cdk deploy` の出力 `ApiUrl`（例 `https://xxxx.execute-api.ap-northeast-1.amazonaws.com/v1`）
-- 必要な権限: `karte-api-invoke` を呼び出し元の IAM ロール／ユーザーに付与
+- 必要な権限: `karte-api-invoke` を**呼び出し元の IAM ロール**に付与（IAM ユーザー・長期キーは作らない）
 - 文字コード: UTF-8、`Content-Type: application/json`
 - 日本国外からの呼び出しは WAF の国判定で 403（`geoBlock=true`、既定）
 
@@ -117,16 +117,31 @@ DynamoDB の GSI で絞り込む（全件スキャンしない）。カルテを
 
 ## 呼び出し例
 
+呼び出し元は **IAM ロール**を引き受けて動く（EC2 のインスタンスプロファイル、ECS タスクロール、
+EKS の IRSA、Roles Anywhere など）。署名は SDK / CLI がロールの一時資格情報で自動的に行う。
+**長期アクセスキーは使わない。**
+
 ```bash
+# 方法1: awscurl（SigV4 を自動で付ける）
+awscurl --service execute-api --region ap-northeast-1 "$API/karte/$MEMBER_ID"
+
+# 方法2: ロールを引き受けて curl で署名前する（一時資格情報なのでキーは残らない）
+CREDS=$(aws sts assume-role --role-arn arn:aws:iam::123456789012:role/p121k-api \
+  --role-session-name p121k-call --query Credentials --output json)
+export AWS_ACCESS_KEY_ID=$(echo "$CREDS" | jq -r .AccessKeyId)
+export AWS_SECRET_ACCESS_KEY=$(echo "$CREDS" | jq -r .SecretAccessKey)
+export AWS_SESSION_TOKEN=$(echo "$CREDS" | jq -r .SessionToken)
+
 curl -sS --aws-sigv4 "aws:amz:ap-northeast-1:execute-api" \
   --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \
+  -H "x-amz-security-token: $AWS_SESSION_TOKEN" \
   "$API/karte/$MEMBER_ID"
 ```
 
 ## IAM 署名（SigV4）の実装例
 
 サービス名は `execute-api`、リージョンは `ap-northeast-1`。
-SDK を使えば署名は自動なので、コードに署名処理を書く必要はない。
+**資格情報はロールから取得する**（SDK の既定チェーンに任せる）。コードにキーを書かない・環境変数に置かない。
 
 ### PHP（`aws/aws-sdk-php`）
 
@@ -147,7 +162,8 @@ $base   = 'https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/v1';
 $region = 'ap-northeast-1';
 $member = 'ハッシュ化されたmember_id';
 
-// 環境変数 AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY（必要なら AWS_SESSION_TOKEN）から取得
+// 既定チェーン: インスタンスプロファイル / タスクロール / IRSA / Roles Anywhere を自動で解決する。
+// 長期キー（AWS_ACCESS_KEY_ID 等）は設定しない。
 $credentials = CredentialProvider::defaultProvider()()->wait();
 $signer = new SignatureV4('execute-api', $region);
 $client = new Client();
@@ -171,82 +187,39 @@ $response = $client->send($signer->signRequest($request, $credentials));
 echo $response->getBody();
 ```
 
-### .NET（C#、外部パッケージ不要）
+### .NET（C#）
 
-.NET 標準ライブラリだけで署名する例。`AWS SDK` を入れる場合は
-`Amazon.Runtime.Internal.Auth.AWS4Signer` を使えば同じことができる。
+AWS SDK の既定チェーン（EC2/ECS/EKS のロール、または SSO）で資格情報を解決し、
+必要なら `sts:AssumeRole` で `p121k-api` を引き受ける。
+
+```bash
+dotnet add package AWSSDK.SecurityToken
+dotnet add package AWSSDK.Core
+```
 
 ```csharp
-using System.Net.Http;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.Json;
+using Amazon.Runtime;
+using Amazon.SecurityToken;
+using Amazon.SecurityToken.Model;
 
-const string BaseUrl = "https://xxxxxxxxxx.execute-api.ap-northeast-1.amazonaws.com/v1";
-const string Region  = "ap-northeast-1";
-const string Member  = "ハッシュ化されたmember_id";
-
-var accessKey    = Environment.GetEnvironmentVariable("AWS_ACCESS_KEY_ID")!;
-var secretKey    = Environment.GetEnvironmentVariable("AWS_SECRET_ACCESS_KEY")!;
-var sessionToken = Environment.GetEnvironmentVariable("AWS_SESSION_TOKEN"); // 一時キーのときだけ
-
-// --- GET /karte/{memberId} ---
-var uri     = new Uri($"{BaseUrl}/karte/{Member}");
-var payload = "";                                   // GET は空ボディ
-var body    = await SendAsync(HttpMethod.Get, uri, payload, accessKey, secretKey, sessionToken);
-Console.WriteLine(body);
-
-static async Task<string> SendAsync(HttpMethod method, Uri uri, string payload,
-                                    string accessKey, string secretKey, string? sessionToken)
+// 1) 実行環境のロール（インスタンスプロファイル等）で p121k-api を引き受ける
+var sts = new AmazonSecurityTokenServiceClient(RegionEndpoint.APNortheast1);
+var assumed = await sts.AssumeRoleAsync(new AssumeRoleRequest
 {
-    var now      = DateTime.UtcNow;
-    var amzDate  = now.ToString("yyyyMMddTHHmmssZ");
-    var date     = now.ToString("yyyyMMdd");
-    var payloadHash = Hex(SHA256.HashData(Encoding.UTF8.GetBytes(payload)));
+    RoleArn         = "arn:aws:iam::123456789012:role/p121k-api",
+    RoleSessionName = "p121k-call",
+});
+var credentials = assumed.Credentials;   // 一時資格情報（1時間で失効）
 
-    // 署名対象ヘッダは必ずアルファベット順。一時キーなら x-amz-security-token も含める
-    var headers = new SortedDictionary<string, string>
-    {
-        ["host"]                 = uri.Host,
-        ["x-amz-content-sha256"] = payloadHash,
-        ["x-amz-date"]           = amzDate,
-    };
-    if (!string.IsNullOrEmpty(sessionToken)) headers["x-amz-security-token"] = sessionToken;
-
-    var canonicalHeaders = string.Concat(headers.Select(h => $"{h.Key}:{h.Value}\n"));
-    var signedHeaders    = string.Join(";", headers.Keys);
-    // クエリはキー名でソートし、各キー・値を URL エンコードする（SigV4 の正規化）
-    var query = string.Join("&", uri.Query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries)
-        .Select(p => p.Split('=', 2))
-        .OrderBy(p => p[0], StringComparer.Ordinal)
-        .Select(p => $"{Uri.EscapeDataString(p[0])}={(p.Length > 1 ? Uri.EscapeDataString(p[1]) : "")}"));
-
-    var canonicalRequest = string.Join("\n", method.Method, uri.AbsolutePath, query,
-                                       canonicalHeaders, signedHeaders, payloadHash);
-    var scope        = $"{date}/{Region}/execute-api/aws4_request";
-    var stringToSign = string.Join("\n", "AWS4-HMAC-SHA256", amzDate, scope,
-                                   Hex(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalRequest))));
-
-    var key = Hmac(Hmac(Hmac(Hmac(Encoding.UTF8.GetBytes("AWS4" + secretKey), date), Region), "execute-api"), "aws4_request");
-    var signature = Hex(Hmac(key, stringToSign));
-
-    using var client = new HttpClient();
-    var req = new HttpRequestMessage(method, uri);
-    foreach (var h in headers.Where(h => h.Key != "host"))
-        req.Headers.TryAddWithoutValidation(h.Key, h.Value);
-    req.Headers.TryAddWithoutValidation("Authorization",
-        $"AWS4-HMAC-SHA256 Credential={accessKey}/{scope}, SignedHeaders={signedHeaders}, Signature={signature}");
-    if (payload.Length > 0) req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
-
-    using var res = await client.SendAsync(req);
-    var text = await res.Content.ReadAsStringAsync();
-    if (!res.IsSuccessStatusCode) throw new Exception($"{(int)res.StatusCode}: {text}");
-    return text;
-}
-
-static string Hex(byte[] b) => Convert.ToHexString(b).ToLowerInvariant();
-static byte[] Hmac(byte[] key, string data) => HMACSHA256.HashData(key, Encoding.UTF8.GetBytes(data));
+// 2) その資格情報で HttpClient に SigV4 を付ける（AWSSDK の AWS4Signer を利用）
+var signer = new Amazon.Runtime.Internal.Auth.AWS4Signer();
+// ...（リクエスト生成 → signer.Sign(...) → SendAsync）
 ```
+
+> SDK を使えない環境（NuGet が使えない等）では、SigV4 を自前実装する必要がある。
+> その場合も**資格情報の取得元はロール**（IMDS / Roles Anywhere / STS）に限る。
+> 実装例は [YMSTTIME_DAT_API](https://github.com/okamoto53515606/YMSTTIME_DAT_API) の .NET サンプルを参照
+> （サービス名を `execute-api` に読み替える）。
 
 ### つまずきやすい点
 
@@ -255,7 +228,6 @@ static byte[] Hmac(byte[] key, string data) => HMACSHA256.HashData(key, Encoding
 | 403 `Missing Authentication Token` | 署名していない（`Authorization` ヘッダが無い） |
 | 403 `Signature expired` | 端末の時計がずれている（UTC で ±5分以内に） |
 | 403 `The request signature we calculated does not match` | クエリの並び順・URL エンコード・`Content-Type` の不一致。ボディを署名していない |
-| 403 `not authorized to perform: execute-api:Invoke` | 署名は正しいが `karte-api-invoke` が無い（キーとポリシーの取り違え） |
+| 403 `not authorized to perform: execute-api:Invoke` | 署名は正しいが、引き受けたロールに `karte-api-invoke` が無い（S3 用ロールを間違えている等） |
 | 403（日本国外） | WAF の国判定。`geoBlock=true` のとき海外 IP は届かない |
-
-> 実装の元ネタと動作確認済みのサンプル: [YMSTTIME_DAT_API](https://github.com/okamoto53515606/YMSTTIME_DAT_API)（PHP / .NET で SigV4 を実装した実績あり。サービス名だけ `execute-api` に読み替える）
+| `Credentials not found`（SDK） | ロールが付いていない。インスタンスプロファイル／タスクロール／Roles Anywhere を確認 |

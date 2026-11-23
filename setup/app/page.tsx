@@ -291,16 +291,20 @@ export default function Page() {
               <tr><th>必要な IAM</th><td><code>{outputs.ApiInvokePolicyArn ?? "karte-api-invoke"}</code></td></tr>
             </tbody>
           </table>
-          <pre>{`# カルテ取得
-aws --region ap-northeast-1 apigateway … ではなく curl で署名する例:
-curl -sS --aws-sigv4 "aws:amz:ap-northeast-1:execute-api" \\
-  --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" \\
+          <pre>{`# ロールを引き受けた状態で署名する（長期キーは使わない）
+# 方法1: awscurl が SigV4 を付ける
+awscurl --service execute-api --region ap-northeast-1 "${apiBase}/karte/<memberId>"
+
+# 方法2: ロールを引き受けて一時資格情報で curl
+CREDS=$(aws sts assume-role --role-arn ${outputs.ApiRoleArn ?? "arn:aws:iam::<account>:role/p121k-api"} \
+  --role-session-name p121k-call --query Credentials --output json)
+curl -sS --aws-sigv4 "aws:amz:ap-northeast-1:execute-api" \
+  --user "$(echo $CREDS | jq -r .AccessKeyId):$(echo $CREDS | jq -r .SecretAccessKey)" \
+  -H "x-amz-security-token: $(echo $CREDS | jq -r .SessionToken)" \
   "${apiBase}/karte/<memberId>"
 
-# レコメンド / 文案 / 削除
-curl … "${apiBase}/karte/<memberId>/reco"
-curl -X POST … "${apiBase}/karte/<memberId>/copy" -d '{"channel":"mail"}'
-curl -X DELETE … "${apiBase}/karte/<memberId>"`}</pre>
+# レコメンド / 文案 / 削除（パスを変えるだけ）
+#   /karte/<memberId>/reco   /karte/<memberId>/copy   DELETE /karte/<memberId>`}</pre>
 
           <div className="actions">
             <button disabled={!deployed || busy !== null}
